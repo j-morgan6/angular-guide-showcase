@@ -100,63 +100,113 @@ _(none yet)_
 
 ## NG014 verdict — is a blocking `[innerHTML]` ban workable?
 
-**Rendered:** the nine `angular-guide` SKILL.md documents plus this project's own
-`README.md` — 10 real markdown files — via a token tree produced by `marked`'s lexer,
-composed into DOM through `MdView` (block dispatcher) and `MdInline` (inline dispatcher,
-added beyond the brief). `marked.parser()` is never called anywhere in
-`src/app/ui/markdown/` (verified by grep — the only matches are the comments that state
-the invariant); no HTML string is built at any point, so there is nothing for NG014 to
-have an opinion about, and nothing to sanitize.
+*(Corrected below — see "Fix round 1" note at the end of this section for what changed
+and why.)*
 
-**Cost:** 4 components, 267 lines of component source (`md-code.ts` 23, `md-table.ts` 38,
-`md-inline.ts` 52, `md-view.ts` 154), plus 114 lines of tests (14 cases, all green). That
-compares against roughly 5 lines for the rejected alternative — one `<div [innerHTML]>`
-bound to `sanitizer.bypassSecurityTrustHtml(marked.parse(md))` plus its import. The
-blocking rule bought a ~50x line multiplier, but every one of those lines is a small,
-independently testable, statically-typed unit — no `any`, no DOM-shape guessing at the
-call site.
+**Rendered:** the corpus is the **nine `angular-guide` SKILL.md files** — the only
+markdown this app actually renders through `MdView`. (This project's own `README.md` is
+*not* in that corpus: `/rules` parses it into structured `Rule` objects for `rule-card`,
+never through the token renderer, and it contains 3 `link` tokens that would have made
+the "zero links" claim below false if it had been included.) Rendered via a token tree
+produced by `marked`'s lexer, composed into DOM through `MdView` (block dispatcher) and
+`MdInline` (inline dispatcher, added beyond the brief). `marked.parser()` is never
+called anywhere in `src/app/ui/markdown/` (verified by grep — the only matches are the
+comments stating the invariant); no HTML string is built at any point, so there is
+nothing for NG014 to have an opinion about, and nothing to sanitize.
 
-**Token types handled — block level (8-way `@switch`, exhaustive against the corpus):**
-`heading`, `paragraph`, `code`, `table`, `list`, `blockquote`, `space`, `hr`. Lexing all
-10 files produced exactly these 7 types in practice (space 436, paragraph 214, heading
-105, code 102, list 29, hr 18, table 4 — 908 block tokens total) — **zero unhandled**,
-independently re-measured against the installed `marked@18.0.12`, not assumed.
+**Cost:** 4 components, 282 lines of component source (`md-code.ts` 23, `md-table.ts`
+38, `md-inline.ts` 52, `md-view.ts` 169), plus 119 lines of tests (14 cases, all green).
+That compares against roughly 5 lines for the rejected alternative — one
+`<div [innerHTML]>` bound to `sanitizer.bypassSecurityTrustHtml(marked.parse(md))` plus
+its import. The blocking rule bought a ~55x line multiplier, but every one of those
+lines is a small, independently testable, statically-typed unit — no `any`, no DOM-shape
+guessing at the call site.
 
-**Token types handled — inline level (scope extension beyond the brief):** `codespan`,
+**Token types handled — block level** (8-way `@switch`, exhaustive against the corpus):
+`heading`, `paragraph`, `code`, `table`, `list`, `blockquote`, `space`, `hr`. Lexing the
+nine files with their YAML frontmatter **stripped** (frontmatter is Task 8's concern —
+`MdView` correctly renders whatever tokens it is given, and is not the layer that should
+strip it) produced exactly 7 of those types in practice — `space` 436, `paragraph` 205,
+`list_item` 110, `heading` 105, `code` 102, `list` 20, `table` 4, **982 block tokens
+total, zero unhandled.** `hr` covers **zero** tokens in the real corpus once frontmatter
+is stripped: all 18 raw `hr` tokens were the `---` YAML delimiters, not content. That
+`@case` is dead code against this corpus, and it would be dishonest to count it as
+coverage — it stays in the `@switch` because a document with a genuine `---` rule exists
+in principle, not because this corpus exercises it. All figures independently re-derived
+against the installed `marked@18.0.12`, not assumed.
+
+**Token types handled — inline level** (scope extension beyond the brief): `codespan`,
 `strong`, `em` (recursing into nested tokens via `MdInline` importing itself), `text`,
-`escape`. The same 10-file corpus produced text 622, codespan 291, strong 9, em 8,
-escape 1 — every one handled. 137 of 319 paragraph/heading blocks (43%) carry inline
-markup; without this extension those blocks would have shown literal backticks and
-asterisks in documentation whose entire subject is code syntax. `link` is the one inline
-type deliberately left unhandled — zero occurrences in the corpus, and it degrades
-through `@default` to visible link text with no anchor, rather than vanishing, if one
-ever appears.
+`escape`. The same nine-file corpus produced `text` 993, `codespan` 455, `strong` 88,
+`em` 8, `escape` 1 — **1,545 inline tokens, every one handled.** 250 of 420
+paragraph/heading/list-item content blocks (**60%**) carry inline markup — nearly all of
+it concentrated in list items, where the corpus bolds the lead phrase of almost every
+numbered rule (`strong` alone is 88 occurrences, the large majority inside `<li>`s).
+Without this extension those blocks would have shown literal backticks and asterisks in
+documentation whose entire subject is code syntax. `link` is the one inline type
+deliberately left unhandled — genuinely **zero** occurrences in the nine-file corpus
+(confirmed after excluding `README.md`, which does contain 3), and it degrades through
+`@default` to visible link text with no anchor, rather than vanishing, if one ever
+appears.
 
-**What the renderer cannot do:** reference-style links, images, footnotes, and multiple
-paragraphs within one loose list item (its inline tokens are concatenated, so a second
-paragraph in the same `<li>` loses its paragraph break but keeps its markup and its
-text) — none of these constructs occurred anywhere in the 10-file corpus, so this is a
-theoretical gap, not one the actual content exposed. Raw inline/block HTML passthrough
-is *deliberately* absent — an `html`-type token (e.g. `<div>…</div>`) falls to
-`@default` and renders as visible escaped text — see the plugin-findings entry this
-verdict sits under: that is NG014's whole point working as intended, not a limitation.
+**What the renderer cannot do:** reference-style links, images, and footnotes — none of
+these constructs occurred anywhere in the nine-file corpus, so this is a theoretical gap,
+not one the actual content exposed. Two more constructs *look* unsupported but degrade
+safely rather than losing content: a nested sub-list inside a list item, and a fenced
+code block embedded in a loose list item, both render as their own raw/plain text inline
+(unstyled, and a nested sub-list shows as literal markdown syntax like
+`"- nested content"` rather than a real nested `<ul>`) instead of vanishing — see the
+"list-item silent-drop" fix below; this is intentionally the minimal fix (visible
+degradation), not full recursive rendering, and neither shape occurs in this corpus
+either. Raw inline/block HTML passthrough is *deliberately* absent — an `html`-type
+token (e.g. `<div>…</div>`) falls to `@default` and renders as visible escaped text: that
+is NG014's whole point working as intended, not a limitation.
 
 **The one real cost of composing instead of parsing:** `marked`'s own token shape had to
 be understood directly rather than trusted to its HTML renderer. A list item's `tokens`
-array holds a *block-level* wrapper (usually one `text`-typed token), and the genuinely
-inline stream is one level deeper, on that wrapper's own `tokens` — this took direct
-lexer inspection to discover (see `listItemTokens()` in `md-view.ts`) and would have
-been invisible plumbing inside `marked.parser()` under the rejected alternative. This
-was the single non-obvious step in the whole task; everything else mapped onto
-`@switch`/`@for` directly.
+array holds *block-level* wrappers (a `text` token for a tight item, or `paragraph` +
+`space` + `code`/`list` for a loose one with embedded content) — this took direct lexer
+inspection to discover, including a review-caught bug (below) where a block with no
+inline `tokens` of its own (a nested `list`, or a `code` block) fell through to an empty
+array and its content silently vanished. Fixed in `listItemTokens()`/`blockAsInline()` in
+`md-view.ts`: a block with no inline tokens now falls back to its own text via
+`tokenText()`, matching the block-level `@default`'s visible-fallback guarantee instead
+of violating it. This is the cost `marked.parser()` would have absorbed silently under
+the rejected alternative — composing over the token tree means owning shapes the
+HTML-string approach never exposes.
 
-**Verdict:** workable as a blocking rule — not merely tolerable, actually well-suited to
-this problem. Rendering 10 real documents, including 43% of blocks carrying inline
-markup, needed 4 small components and no construct the corpus didn't already exercise.
-The hardest case — recursive nested markup (`**bold *and italic* together**`) — needed
-nothing more exotic than a component importing itself. NG014's fix text ("compose real
-components instead") was directly actionable and the composition it produced is not
-padding: every component earns its line count by handling a token type that genuinely
-appears in the target content. No hook fired during this task's writes — not because
-enforcement was bypassed, but because the design never produced an `[innerHTML]` binding
-or a `bypassSecurityTrust*` call to trigger on.
+**Verdict:** workable as a blocking rule — the corrected numbers make the case *more*
+comfortably than the original ones, not less. Rendering nine real documents, including
+60% of content blocks carrying inline markup concentrated in list items, needed 4 small
+components and no construct the corpus didn't already exercise (`hr` aside, which costs
+one dead `@case`, honestly disclosed above). The hardest case — recursive nested markup
+(`**bold *and italic* together**`) — needed nothing more exotic than a component
+importing itself. The one real defect the design produced — silently dropping a list
+item's non-inline block content — was a `listItemTokens()` bug, not a limit of the
+composition approach itself, and it was fixable in a few lines because the invariant
+("never drop, always degrade visibly") was already the design's stated contract; the bug
+was a violation of that contract, not evidence the contract is unreachable. NG014's fix
+text ("compose real components instead") was directly actionable, and the composition it
+produced is not padding: every component earns its line count against a token type that
+genuinely appears in the target content. No hook fired during this task's writes — not
+because enforcement was bypassed, but because the design never produced an `[innerHTML]`
+binding or a `bypassSecurityTrust*` call to trigger on.
+
+---
+
+**Fix round 1 (post-review correction):** the original version of this section defined
+its corpus as "the nine SKILL.md files plus this project's README.md" and, on that
+10-file corpus, claimed zero `link` occurrences — false; `README.md` alone has 3. It also
+used inline counts (`strong` 9, `codespan` 291) from a script that walked paragraph/
+heading blocks only and never descended into list items, undercounting `strong` by
+roughly 10x (the corpus's real total is 88, not 9 — nearly all of it inside `<li>`s that
+script never visited). Both errors are corrected above: the corpus is now the nine files
+actually rendered (README is out — it's parsed into `Rule` objects elsewhere, never
+through `MdView`), and every count was re-derived independently against the installed
+`marked@18.0.12` rather than taken on faith. The same review also caught the
+`listItemTokens()` silent-drop bug described above, with a failing test
+(`renders nested list items recursively`, now genuinely nested) added before the fix.
+None of the corrections change the verdict; the corrected inline numbers make the case
+for the extension's value *stronger* (60% of content blocks carry markup, not 43%), and
+the `hr`-is-dead-code disclosure and the fixed silent-drop bug are exactly the kind of
+finding this verdict exists to surface honestly rather than paper over.

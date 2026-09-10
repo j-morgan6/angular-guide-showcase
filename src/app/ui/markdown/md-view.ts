@@ -146,9 +146,24 @@ export class MdView {
    * A list item's genuinely-inline tokens. marked wraps an item's content in
    * one or more block-level tokens (usually a single `text` token for a
    * tight item); the real inline stream is one level deeper, on each of
-   * those wrappers' own `tokens`.
+   * those wrappers' own `tokens`. A block with no inline `tokens` of its own
+   * — a nested sub-list (`items`, not `tokens`) or an embedded fenced code
+   * block, neither of which occurs in the target corpus — falls back to its
+   * own text via `blockAsInline()` so it degrades visibly instead of
+   * vanishing, matching the block-level `@default`'s guarantee.
    */
   protected listItemTokens(item: MdToken): MdToken[] {
-    return this.inlineTokens(item).flatMap((block) => this.inlineTokens(block));
+    return this.inlineTokens(item).flatMap((block) => this.blockAsInline(block));
+  }
+
+  /** A list item's block, rendered inline: its own inline tokens if it has
+   * any, otherwise its raw text as a single visible fallback token. */
+  private blockAsInline(block: MdToken): MdToken[] {
+    const nested = this.inlineTokens(block);
+    if (nested.length > 0) {
+      return nested;
+    }
+    const raw = tokenText(block);
+    return raw ? [{ type: 'text', raw, text: raw }] : [];
   }
 }

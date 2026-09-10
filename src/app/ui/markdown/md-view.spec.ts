@@ -44,8 +44,13 @@ describe('MdView', () => {
   });
 
   it('renders nested list items recursively', () => {
-    const el = render('- first\n- second');
+    // Genuinely nested: the outer item's own block tokens are [text, list],
+    // not a single inline-bearing block. A flat list (`- first\n- second`)
+    // never exercises this path — it would pass even if nesting silently
+    // dropped content, which is exactly the bug this test must catch.
+    const el = render('- first\n  - nested content here\n- second');
     expect(el.querySelectorAll('li')).toHaveLength(2);
+    expect(el.textContent).toContain('nested content here');
   });
 
   it('renders an unhandled token as visible text rather than dropping it', () => {
