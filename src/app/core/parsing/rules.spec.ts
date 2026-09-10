@@ -1,6 +1,25 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseRules, parseRulesOrThrow, RuleParseError, type Rule, type RuleKind } from './rules';
+
+/**
+ * Resolve a workspace-relative path independently of the process cwd.
+ * `import.meta.url` is not a file:// URL under this builder's esbuild bundle,
+ * and no `.md` loader is configured, so neither of the usual approaches works —
+ * anchor on angular.json the same way the Angular CLI locates the workspace.
+ */
+function fromWorkspaceRoot(relativePath: string): string {
+  let dir = resolve(process.cwd());
+  while (!existsSync(join(dir, 'angular.json'))) {
+    const parent = dirname(dir);
+    if (parent === dir) {
+      throw new Error(`Could not locate angular.json above ${process.cwd()}`);
+    }
+    dir = parent;
+  }
+  return join(dir, relativePath);
+}
 
 const README = `
 ## Bash rules
@@ -90,10 +109,10 @@ describe('parseRulesOrThrow', () => {
 });
 
 describe('parseRules against the real angular-guide README', () => {
-  // import.meta.url is not a file:// URL under the esbuild bundle this test
-  // runner produces, so __dirname-style resolution via fileURLToPath fails.
-  // The test process's cwd is the workspace root, so resolve from there.
-  const real = readFileSync('src/app/core/parsing/__fixtures__/angular-guide-readme.md', 'utf8');
+  const real = readFileSync(
+    fromWorkspaceRoot('src/app/core/parsing/__fixtures__/angular-guide-readme.md'),
+    'utf8',
+  );
 
   it('finds all 30 rules', () => {
     expect(parseRules(real)).toHaveLength(30);
