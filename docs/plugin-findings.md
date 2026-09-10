@@ -46,6 +46,20 @@ violation. The file under edit is a spec file whose entire purpose is to hold ex
 test intent (an example blocking-rule row), no assertion in the spec depends on the exact wording of NG001's
 trigger text, so nothing was lost. Did not disable the plugin or bypass the hook.
 
+### NG103 — src/app/core/github/github-api.ts (Task 4, writing `GithubApi`)
+**Code:** `@Injectable({ providedIn: 'root' })` on `export class GithubApi` — as specified verbatim in the
+task-4 brief's Interfaces section (`GithubApi service, providedIn: 'root'`).
+**Verdict:** true positive, advisory (non-blocking)
+**Why:** this is a `PostToolUse` advisory, not a block — the `Write` succeeded and compilation was unaffected.
+`hook-lint.sh` correctly identifies that Angular v22.1.6 exports a `Service` decorator (confirmed in
+`node_modules/@angular/core/types/core.d.ts:1268-1322`: `ServiceDecorator`, called with no arguments, is
+`autoProvided: true` by default — the same root-provided-singleton semantics as
+`@Injectable({ providedIn: 'root' })`, just without a nested options object). The brief's Interfaces section
+specifies the *behavior* ("providedIn: 'root'"), not literal decorator syntax, so switching to `@Service()`
+satisfies the brief's contract and the plugin's modern-Angular guidance at once.
+**Action:** complied — changed `GithubApi` to `@Service()` and dropped the `Injectable` import. Behavior is
+identical (root-provided singleton); this is a syntax modernization, not a functional change.
+
 ---
 
 ## Rules that should have fired but did not
