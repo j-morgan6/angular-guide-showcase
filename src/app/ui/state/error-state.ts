@@ -8,7 +8,7 @@ import { Component, input, output } from '@angular/core';
 @Component({
   selector: 'error-state',
   template: `
-    <div class="box" [class.limited]="rateLimited()">
+    <div class="box" role="alert" [class.limited]="rateLimited()">
       @if (rateLimited()) {
         <h3>GitHub rate limit reached</h3>
         <p>
