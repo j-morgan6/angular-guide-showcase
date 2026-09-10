@@ -95,3 +95,68 @@ why it is recorded here rather than left to be rediscovered.
 ## Skill guidance that conflicted with what the code needed
 
 _(none yet)_
+
+---
+
+## NG014 verdict — is a blocking `[innerHTML]` ban workable?
+
+**Rendered:** the nine `angular-guide` SKILL.md documents plus this project's own
+`README.md` — 10 real markdown files — via a token tree produced by `marked`'s lexer,
+composed into DOM through `MdView` (block dispatcher) and `MdInline` (inline dispatcher,
+added beyond the brief). `marked.parser()` is never called anywhere in
+`src/app/ui/markdown/` (verified by grep — the only matches are the comments that state
+the invariant); no HTML string is built at any point, so there is nothing for NG014 to
+have an opinion about, and nothing to sanitize.
+
+**Cost:** 4 components, 267 lines of component source (`md-code.ts` 23, `md-table.ts` 38,
+`md-inline.ts` 52, `md-view.ts` 154), plus 114 lines of tests (14 cases, all green). That
+compares against roughly 5 lines for the rejected alternative — one `<div [innerHTML]>`
+bound to `sanitizer.bypassSecurityTrustHtml(marked.parse(md))` plus its import. The
+blocking rule bought a ~50x line multiplier, but every one of those lines is a small,
+independently testable, statically-typed unit — no `any`, no DOM-shape guessing at the
+call site.
+
+**Token types handled — block level (8-way `@switch`, exhaustive against the corpus):**
+`heading`, `paragraph`, `code`, `table`, `list`, `blockquote`, `space`, `hr`. Lexing all
+10 files produced exactly these 7 types in practice (space 436, paragraph 214, heading
+105, code 102, list 29, hr 18, table 4 — 908 block tokens total) — **zero unhandled**,
+independently re-measured against the installed `marked@18.0.12`, not assumed.
+
+**Token types handled — inline level (scope extension beyond the brief):** `codespan`,
+`strong`, `em` (recursing into nested tokens via `MdInline` importing itself), `text`,
+`escape`. The same 10-file corpus produced text 622, codespan 291, strong 9, em 8,
+escape 1 — every one handled. 137 of 319 paragraph/heading blocks (43%) carry inline
+markup; without this extension those blocks would have shown literal backticks and
+asterisks in documentation whose entire subject is code syntax. `link` is the one inline
+type deliberately left unhandled — zero occurrences in the corpus, and it degrades
+through `@default` to visible link text with no anchor, rather than vanishing, if one
+ever appears.
+
+**What the renderer cannot do:** reference-style links, images, footnotes, and multiple
+paragraphs within one loose list item (its inline tokens are concatenated, so a second
+paragraph in the same `<li>` loses its paragraph break but keeps its markup and its
+text) — none of these constructs occurred anywhere in the 10-file corpus, so this is a
+theoretical gap, not one the actual content exposed. Raw inline/block HTML passthrough
+is *deliberately* absent — an `html`-type token (e.g. `<div>…</div>`) falls to
+`@default` and renders as visible escaped text — see the plugin-findings entry this
+verdict sits under: that is NG014's whole point working as intended, not a limitation.
+
+**The one real cost of composing instead of parsing:** `marked`'s own token shape had to
+be understood directly rather than trusted to its HTML renderer. A list item's `tokens`
+array holds a *block-level* wrapper (usually one `text`-typed token), and the genuinely
+inline stream is one level deeper, on that wrapper's own `tokens` — this took direct
+lexer inspection to discover (see `listItemTokens()` in `md-view.ts`) and would have
+been invisible plumbing inside `marked.parser()` under the rejected alternative. This
+was the single non-obvious step in the whole task; everything else mapped onto
+`@switch`/`@for` directly.
+
+**Verdict:** workable as a blocking rule — not merely tolerable, actually well-suited to
+this problem. Rendering 10 real documents, including 43% of blocks carrying inline
+markup, needed 4 small components and no construct the corpus didn't already exercise.
+The hardest case — recursive nested markup (`**bold *and italic* together**`) — needed
+nothing more exotic than a component importing itself. NG014's fix text ("compose real
+components instead") was directly actionable and the composition it produced is not
+padding: every component earns its line count by handling a token type that genuinely
+appears in the target content. No hook fired during this task's writes — not because
+enforcement was bypassed, but because the design never produced an `[innerHTML]` binding
+or a `bypassSecurityTrust*` call to trigger on.
