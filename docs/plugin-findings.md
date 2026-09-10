@@ -32,6 +32,20 @@ Angular CLI wrapper does not pass unknown flags through to the underlying Vitest
 before Vitest ever sees it. `--watch=false` is the one that actually works here.
 **Action:** used `npx ng test --watch=false` for all test runs in this task; tests passed (see report).
 
+### NG001 — src/app/core/parsing/rules.spec.ts (Task 3, writing the fixture README)
+**Code:** the test fixture's `README` template literal contained the line
+`` | NG001 | \`standalone: true\` in a decorator | Delete the property. | v20+ | `` — verbatim text from the
+task-3 brief, describing NG001 as a row inside a fake markdown README used as test data.
+**Verdict:** false positive
+**Why:** `check_ng001()` in `hook-lint.sh` (line 323) is `grep -qE 'standalone:[[:space:]]*true' "$CODE_PATH"` —
+a plain text scan of the whole `.ts` file, with no awareness of string/template-literal context. It cannot
+distinguish an actual `@Component({ standalone: true })` decorator from the substring `standalone: true`
+appearing inside a markdown fixture string that is *data describing* the rule, not an instance of the
+violation. The file under edit is a spec file whose entire purpose is to hold example rule-table rows as text.
+**Action:** reworded the fixture row to `` \`standalone\` property set to \`true\` in a decorator `` — same
+test intent (an example blocking-rule row), no assertion in the spec depends on the exact wording of NG001's
+trigger text, so nothing was lost. Did not disable the plugin or bypass the hook.
+
 ---
 
 ## Rules that should have fired but did not
