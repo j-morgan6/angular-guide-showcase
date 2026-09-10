@@ -61,13 +61,28 @@ describe('RulesPage', () => {
     expect(cards[0].textContent).toContain('NG001');
   });
 
-  it('filters by free-text query across id and trigger', async () => {
+  it('filters by free-text query across id, trigger and fix', async () => {
     const fixture = await renderWithReadme(README);
-    fixture.componentInstance.setQuery('standalone');
-    fixture.detectChanges();
-    expect(
-      (fixture.nativeElement as HTMLElement).querySelectorAll('rule-card'),
-    ).toHaveLength(1);
+    const cardsFor = (query: string) => {
+      fixture.componentInstance.setQuery(query);
+      fixture.detectChanges();
+      return (fixture.nativeElement as HTMLElement).querySelectorAll('rule-card');
+    };
+
+    // 'standalone' appears only in NG001's trigger text.
+    let cards = cardsFor('standalone');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].textContent).toContain('NG001');
+
+    // 'NG101' appears only as NG101's own id — not in any trigger or fix text.
+    cards = cardsFor('NG101');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].textContent).toContain('NG101');
+
+    // 'loadcomponent' appears only in NG101's fix text — not in any id or trigger.
+    cards = cardsFor('loadcomponent');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].textContent).toContain('NG101');
   });
 
   it('shows a parse error naming what it expected when the README has no tables', async () => {
