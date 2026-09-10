@@ -22,12 +22,23 @@ describe('lexMarkdown', () => {
     expect(lexMarkdown('')).toEqual([]);
   });
 
-  it('never throws on malformed input', () => {
+  it('degrades malformed input to recoverable tokens without throwing', () => {
     expect(() => lexMarkdown('```unterminated\n\n| broken |')).not.toThrow();
+  });
+
+  it('returns an empty array when the lexer throws', () => {
+    // marked recurses per blockquote level; deep nesting overflows the stack.
+    // Verified: bare lexer() throws RangeError on this input.
+    expect(lexMarkdown('> '.repeat(20000) + 'x')).toEqual([]);
   });
 
   it('extracts plain text from a token', () => {
     const tokens = lexMarkdown('Some **bold** text');
     expect(tokenText(tokens[0])).toContain('bold');
+  });
+
+  it('falls back to raw source for tokens without text', () => {
+    const [hr] = lexMarkdown('---');
+    expect(tokenText(hr)).toContain('---');
   });
 });
