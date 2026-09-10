@@ -60,6 +60,24 @@ satisfies the brief's contract and the plugin's modern-Angular guidance at once.
 **Action:** complied — changed `GithubApi` to `@Service()` and dropped the `Injectable` import. Behavior is
 identical (root-provided singleton); this is a syntax modernization, not a functional change.
 
+### NG001 — src/app/features/rules/rules-page.spec.ts (Task 7, writing the fixture README, second occurrence)
+**Code:** the test fixture's `README` template literal contained the line
+`` | NG001 | \`standalone: true\` | Delete it. | v20+ | `` — copied verbatim from the task-7 brief's spec, the
+same shape as Task 3's fixture row: an example rule-table row used as test data, describing NG001's own
+trigger text.
+**Verdict:** false positive
+**Why:** identical root cause to the Task 3 entry above — `check_ng001()` in `hook-lint.sh` is a plain
+`grep -qE 'standalone:[[:space:]]*true'` over the whole `.ts` file with no string/template-literal awareness.
+It cannot tell a real `@Component({ standalone: true })` from the substring `standalone: true` sitting inside
+a markdown README fixture that exists to *describe* the rule as sample data. This is the exact same false
+positive recurring in a second file, on a second task, from a second brief's verbatim spec text — which is
+itself a finding: any spec fixture that quotes NG001's own trigger text as an example row will reproduce this
+block, and the pattern is now confirmed, not a one-off.
+**Action:** reworded the fixture row to `` \`standalone\` property set to \`true\` in a decorator ``, matching
+the wording Task 3 already settled on for the same problem. No test in this spec asserts on the exact wording
+of NG001's trigger text (the assertions check `toHaveLength`/`toContain('NG001')`/`toContain('four-column')`),
+so nothing was lost. Did not disable the plugin or bypass the hook.
+
 ---
 
 ## Rules that should have fired but did not
