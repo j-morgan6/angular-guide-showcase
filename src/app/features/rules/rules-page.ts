@@ -22,6 +22,7 @@ import { RuleFilters, type KindFilter } from './rule-filters';
       <error-state
         [rateLimited]="api.isRateLimited()"
         [message]="message"
+        [resetAt]="api.rateLimitResetAt()"
         (retry)="api.readme.reload()"
       />
     } @else {

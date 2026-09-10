@@ -62,7 +62,7 @@ export function parseRules(readme: string): Rule[] {
 
   for (const token of lexMarkdown(readme)) {
     for (const row of rowsOf(token)) {
-      if (row.length < 4) {
+      if (row.length !== 4) {
         continue;
       }
       const id = cellText(row[0]);

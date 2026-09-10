@@ -66,6 +66,40 @@ describe('ActivityPage', () => {
     expect(cards[0].textContent).toContain('41');
   });
 
+  /**
+   * Blocker 3: the deferred contributors block had only an isLoading branch
+   * and an @else that rendered `api.contributors.value() ?? []` — a 403 or
+   * 500 collapsed into the same empty grid as a repo with genuinely no
+   * contributors, indistinguishable from each other. This test flushes the
+   * contributors request with a failure and can only pass if the template
+   * has a distinct failure branch rendering error-state; against the
+   * pre-fix template it renders an empty `.contributors` grid with no
+   * error-state and no failure text.
+   */
+  it('renders error-state, not a silently-empty grid, when the contributors request fails', async () => {
+    const fixture = TestBed.createComponent(ActivityPage);
+    fixture.detectChanges();
+    http
+      .expectOne((r) => r.url === REPO_URL)
+      .flush({ name: 'angular-guide', stargazers_count: 4, forks_count: 1, open_issues_count: 0, pushed_at: '2026-09-07T00:00:00Z', description: 'd' });
+    http.expectOne((r) => r.url.includes('/commits')).flush([]);
+    http.expectOne((r) => r.url.includes('/contributors')).flush('boom', {
+      status: 500,
+      statusText: 'Server Error',
+    });
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    const [block] = await fixture.getDeferBlocks();
+    await block.render(DeferBlockState.Complete);
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('error-state')).not.toBeNull();
+    expect(el.querySelectorAll('contributor-card')).toHaveLength(0);
+    expect(el.querySelector('.contributors')).toBeNull();
+  });
+
   it('shows repo metadata as distinct stats, not just any digit on the page', async () => {
     const fixture = TestBed.createComponent(ActivityPage);
     fixture.detectChanges();

@@ -20,18 +20,6 @@ Also recorded: rules that should have fired and did not.
 blocked with no profile on disk. See the next entry.
 **Action:** none — file removed.
 
-### BG004 — `npx ng test --run` (Task 1 verification step)
-**Code:** `npx ng test --run` (as literally specified in the Task 1 brief)
-**Verdict:** true positive, with an inaccurate remedy for this toolchain version
-**Why:** BG004 correctly blocks bare `ng test` (which defaults to watch mode and hangs a non-interactive
-session). `npx ng test --run` was accepted by the guard — it treats `--run` as satisfying the rule — but
-Angular v22.1.7's `@angular/build:unit-test` builder (the wrapper `ng test` invokes) rejected it outright with
-`Error: Unknown argument: run`. The guard's own suggested fix text — "Run `ng test --watch=false` (Karma) or
-`ng test --run` (Vitest)" — offers `--run` as the Vitest-flavored alternative, but at this builder version the
-Angular CLI wrapper does not pass unknown flags through to the underlying Vitest binary, so `--run` fails
-before Vitest ever sees it. `--watch=false` is the one that actually works here.
-**Action:** used `npx ng test --watch=false` for all test runs in this task; tests passed (see report).
-
 ### BG004 — `npx ng test --help` (controller verification, after Task 1)
 **Code:** `npx ng test --help`
 **Verbatim hook output:**
@@ -51,25 +39,37 @@ exactly that.
 a finding; suggested fix is to narrow BG004 to skip commands carrying `--help`, `-h`, or
 `--version`.
 
-### BG004 — remedy text is wrong for Angular v22's Vitest builder
-**Related to:** the Task 1 entry above on `npx ng test --run`.
-**Verdict:** true defect (inaccurate remediation)
-**Why:** BG004's fix text reads "Run `ng test --watch=false` (Karma) or `ng test --run`
-(Vitest)." The `--run` branch is wrong for the current Angular toolchain. Controller-verified
-directly on this workspace: Angular CLI 22.1.7, builder `@angular/build:unit-test`, Vitest
-4.1.11 —
+### BG004 — `git commit` blocked on a commit-message mention of `ng test --run` (final fix wave)
+**Code:** `git commit -m "$(cat <<'EOF' ... EOF)"`, where the heredoc body is this fix wave's
+commit message, containing the prose sentence `moved the non-firing "npx ng test --run" entry
+out of the hook-firing tally` — a description of the Blocker-1 fix, not a shell invocation of
+any kind.
+**Verbatim hook output:**
 ```
-$ npx ng test --run
-Error: Unknown argument: run
+🚫 BG004: `ng test` runs in watch mode by default and will hang this session.
+   💡 Fix: Run `ng test --watch=false` (Karma) or `ng test --run` (Vitest).
 ```
-The CLI wrapper validates its own argument list before delegating and does not pass unknown
-flags through to the Vitest binary, so `--run` never reaches Vitest. `--watch=false` works on
-both builders. The rule fires correctly; only its advice is wrong — which is arguably worse
-than a false positive, because a user who follows the suggested fix hits a second failure and
-has no reason to suspect the guidance rather than their own setup.
-**Action:** none required in this project (every task used `--watch=false` directly, per the
-Task 1 finding above). Suggested fix: change BG004's fix text to recommend `--watch=false`
-unconditionally; drop the `--run` variant or gate it on a builder check.
+**Verdict:** false positive
+**Why:** `git commit` does not run `ng test` at all — the entire command is a commit with a
+literal string payload, never executed as a nested command. BG004's own guard
+(`bash-guard.sh:136-137`) scans the raw `$CMD` text for the bare substring `ng test`
+with no awareness of shell quoting, heredoc bodies, or that a commit message is inert prose,
+not a command to run. It found `ng test` (line 16 of the message: `"npx ng test --run" entry`)
+and then checked whether the whole command string also contained one of the exemption
+patterns — but the exemption regex requires `--run` to be followed by whitespace, `=`, or
+end-of-line (`--run([[:space:]=]|$)`), and in the message text `--run` was immediately
+followed by a closing double-quote (`"npx ng test --run" entry`), not whitespace. The
+exemption text was present but in a shape the exemption's own trailing-context requirement
+rejected, so the base trigger fired unopposed. This is the same class of defect as the NG001
+addendum documented above (a bare-text scan with no string/quoting/heredoc awareness), now
+observed on BG004 instead of a `check_ng*` rule, and on a `git commit` command instead of an
+`ng test` invocation — the false positive is not confined to actual test-runner commands at
+all; any command whose argument text happens to contain the substring `ng test` unaccompanied
+by a trailing-whitespace-anchored exemption flag can trigger it, including a commit message
+describing this very defect.
+**Action:** reworded the commit message to avoid the literal adjacency (referred to "the
+`--run` flag" and "BG004's `--run` exemption" instead of the bare phrase `ng test --run`
+inside quotes). Did not disable the plugin or bypass the hook.
 
 ### NG001 — src/app/core/parsing/rules.spec.ts (Task 3, writing the fixture README)
 **Code:** the test fixture's `README` template literal contained the line
@@ -117,6 +117,23 @@ the wording Task 3 already settled on for the same problem. No test in this spec
 of NG001's trigger text (the assertions check `toHaveLength`/`toContain('NG001')`/`toContain('four-column')`),
 so nothing was lost. Did not disable the plugin or bypass the hook.
 
+### NG001 — src/app/core/parsing/rules.spec.ts (final fix wave, blocker-5 test, third occurrence)
+**Code:** the new 5-column-table regression test's fixture string contained
+`` `standalone: true` in a decorator `` — copied from the blocker report's own reproduction example, describing
+a hypothetical upstream README row as test data, not a real decorator.
+**Verdict:** false positive
+**Why:** identical root cause to the Task 3 and Task 7 entries above — `check_ng001()` is a bare
+`grep -qE 'standalone:[[:space:]]*true'` over the whole file with no string/template-literal awareness, so it
+cannot distinguish this substring appearing inside a test-fixture string from an actual
+`@Component({ standalone: true })`. Third occurrence of the exact same false positive, in a third file, across
+three separate work sessions — the systemic pattern documented in the "NG001 addendum" entry below reproduced
+itself immediately upon writing a new fixture, exactly as that entry predicted it would for "any spec fixture
+that quotes NG001's own trigger text as an example row."
+**Action:** reworded the fixture row to `` \`standalone\` property set to \`true\` in a decorator ``, the same
+wording Task 3 and Task 7 already settled on, preserving the same test intent — a 5-column row whose first
+cell is a rule ID. No assertion in the test depends on the exact wording. Did not disable the plugin or bypass
+the hook.
+
 ### NG001 addendum — the plugin has a spec-file escape hatch and 20 of 24 rules ignore it
 **Extends:** the Task 3 NG001 false-positive entry above (recurring a second time in the Task 7
 entry below it).
@@ -149,6 +166,63 @@ the rule fired on a fixture whose content is the rule's own documentation, twice
    — the same treatment for string contents would fix this class at the root rather than per-rule).
 3. At minimum, downgrade to advisory inside spec files rather than blocking, so a fixture cannot
    halt work.
+
+---
+
+## Defects that are not hook firings
+
+These are real BG004 defects, but neither is a firing and neither belongs in the tally above —
+one was moved here on correction (see the note below), the other was never counted as a firing
+in the first place. Both are the same underlying defect: BG004's advice, not its trigger, is
+broken for this toolchain.
+
+### BG004 — `--run` remedy is broken on this toolchain (not a firing)
+**Where surfaced:** Task 1's verification step specified `npx ng test --run` verbatim, exactly as
+written in the task-1 brief.
+**Verdict:** true defect (inaccurate remediation) — **not a hook firing**
+**Why this is not a firing:** the original version of this log entry lived under "Hook firings"
+with a "true positive" verdict, on the claim that BG004 "correctly blocked" this command. That
+was wrong, and is corrected here. BG004's guard (`bash-guard.sh:135-136`) is:
+```bash
+if printf '%s' "$CMD" | grep -qE '(^|[[:space:]&|;])ng[[:space:]]+test([[:space:]]|$)' \
+   && ! printf '%s' "$CMD" | grep -qE -- '--watch[= ]false|--no-watch|--run([[:space:]=]|$)|--ci([[:space:]=]|$)'; then
+```
+The negative lookahead explicitly exempts `--run` from the block condition, so `npx ng test --run`
+was *accepted* by the guard, not blocked. There is no verbatim hook output for this entry — unlike
+every genuine firing above — because nothing fired. The command simply reached the Angular CLI,
+which then rejected it on its own terms.
+**Why it still matters:** BG004 correctly blocks bare `ng test` (which defaults to watch mode and
+hangs a non-interactive session) — that part of the guard is sound. But one of the flag forms it
+accepts as satisfying the rule does not work on this toolchain: Angular v22.1.7's
+`@angular/build:unit-test` builder rejects `--run` outright —
+```
+$ npx ng test --run
+Error: Unknown argument: run
+```
+— and BG004's own fix text ("Run `ng test --watch=false` (Karma) or `ng test --run` (Vitest)")
+recommends exactly that broken flag as the Vitest-flavored alternative. The CLI wrapper validates
+its own argument list before delegating and never passes `--run` through to the Vitest binary
+underneath, so a user who follows BG004's own suggested fix hits a second, unrelated failure.
+`--watch=false` works on both builders and is what this project used throughout.
+**Action:** used `npx ng test --watch=false` for all test runs in this project (see the Task 1
+report). Suggested fix: change BG004's fix text to recommend `--watch=false` unconditionally; drop
+the `--run` variant or gate it on a builder check.
+
+### BG004 — remedy text is wrong for Angular v22's Vitest builder (controller-verified, second pass)
+**Related to:** the entry directly above — same underlying defect, verified independently by the
+controller after Task 1.
+**Verdict:** true defect (inaccurate remediation) — not a hook firing
+**Why:** re-confirms the above directly against this workspace: Angular CLI 22.1.7, builder
+`@angular/build:unit-test`, Vitest 4.1.11 —
+```
+$ npx ng test --run
+Error: Unknown argument: run
+```
+The rule's *trigger* logic is sound (it does not fire here, correctly — see above); only its
+*advice* is wrong, which is arguably worse than a false positive, because a user who trusts the
+fix message has no reason to suspect the guidance rather than their own setup.
+**Action:** none required beyond the above. Suggested fix is the same: change BG004's fix text to
+recommend `--watch=false` unconditionally; drop the `--run` variant or gate it on a builder check.
 
 ---
 
@@ -260,7 +334,7 @@ comments stating the invariant); no HTML string is built at any point, so there 
 nothing for NG014 to have an opinion about, and nothing to sanitize.
 
 **Cost:** 4 components, 282 lines of component source (`md-code.ts` 23, `md-table.ts`
-38, `md-inline.ts` 52, `md-view.ts` 169), plus 119 lines of tests (14 cases, all green).
+38, `md-inline.ts` 52, `md-view.ts` 169), plus 128 lines of tests (15 cases, all green).
 That compares against roughly 5 lines for the rejected alternative — one
 `<div [innerHTML]>` bound to `sanitizer.bypassSecurityTrustHtml(marked.parse(md))` plus
 its import. The blocking rule bought a ~55x line multiplier, but every one of those
@@ -271,14 +345,25 @@ guessing at the call site.
 `heading`, `paragraph`, `code`, `table`, `list`, `blockquote`, `space`, `hr`. Lexing the
 nine files with their YAML frontmatter **stripped** (frontmatter is Task 8's concern —
 `MdView` correctly renders whatever tokens it is given, and is not the layer that should
-strip it) produced exactly 7 of those types in practice — `space` 436, `paragraph` 205,
-`list_item` 110, `heading` 105, `code` 102, `list` 20, `table` 4, **982 block tokens
-total, zero unhandled.** `hr` covers **zero** tokens in the real corpus once frontmatter
-is stripped: all 18 raw `hr` tokens were the `---` YAML delimiters, not content. That
-`@case` is dead code against this corpus, and it would be dishonest to count it as
-coverage — it stays in the `@switch` because a document with a genuine `---` rule exists
-in principle, not because this corpus exercises it. All figures independently re-derived
-against the installed `marked@18.0.12`, not assumed.
+strip it) produced **space** 436, **paragraph** 205, **heading** 105, **code** 102,
+**list** 20, **table** 4 — **982 block tokens total** once `list_item` (110) is added
+back in, **zero unhandled.** `list_item` is not itself a `@switch` case — it is reached
+through the `list` case's own recursion, not dispatched at the top level — so it does not
+count toward how many of the switch's 8 cases the corpus exercises.
+
+**Two of the eight `@switch` cases are dead code against this corpus, not one.** `hr`
+covers **zero** tokens once frontmatter is stripped: all 18 raw `hr` tokens were the
+`---` YAML delimiters, not content. `blockquote` also covers **zero** tokens: the corpus
+contains no blockquotes at all. An earlier version of this section disclosed only the
+`hr` gap and claimed "7 of 8 types in practice" — that count was wrong on two counts: it
+silently dropped `blockquote` from the dead list, and it counted `list_item` as one of
+the "types in practice" even though it is not a `@switch` case. Corrected: **the corpus
+exercises 6 of the 8 `@switch` cases** (`heading`, `paragraph`, `code`, `table`, `list`,
+`space`), and two (`hr`, `blockquote`) are dead code against it. Both stay in the
+`@switch` because a document containing a genuine `---` rule or a genuine quoted passage
+exists in principle, not because this corpus exercises either — it would be dishonest to
+count either as coverage. All figures independently re-derived against the installed
+`marked@18.0.12`, not assumed.
 
 **Token types handled — inline level** (scope extension beyond the brief): `codespan`,
 `strong`, `em` (recursing into nested tokens via `MdInline` importing itself), `text`,
@@ -323,8 +408,8 @@ HTML-string approach never exposes.
 **Verdict:** workable as a blocking rule — the corrected numbers make the case *more*
 comfortably than the original ones, not less. Rendering nine real documents, including
 60% of content blocks carrying inline markup concentrated in list items, needed 4 small
-components and no construct the corpus didn't already exercise (`hr` aside, which costs
-one dead `@case`, honestly disclosed above). The hardest case — recursive nested markup
+components and no construct the corpus didn't already exercise (`hr` and `blockquote`
+aside, which cost two dead `@case`s, honestly disclosed above). The hardest case — recursive nested markup
 (`**bold *and italic* together**`) — needed nothing more exotic than a component
 importing itself. The one real defect the design produced — silently dropping a list
 item's non-inline block content — was a `listItemTokens()` bug, not a limit of the
@@ -382,29 +467,66 @@ reasoning changed.
 
 ---
 
+**Fix round 3 (final whole-branch review correction):** the block-level census above
+understated its own dead code. It disclosed `hr` as the one dead `@case` and claimed the
+corpus produced "exactly 7 of those types in practice," implicitly counting `list_item`
+as a `@switch`-level type. Both were wrong: re-deriving the census directly against the
+nine installed `SKILL.md` files with frontmatter stripped shows `blockquote` is also
+**zero** — a second dead `@case`, not disclosed before — and `list_item` (110 occurrences)
+is reached through the `list` case's own recursion, never dispatched at the top-level
+`@switch`, so it is not one of "those types" at all. The corpus therefore exercises **6 of
+the 8** `@switch` cases (`heading`, `paragraph`, `code`, `table`, `list`, `space`), not 7,
+and two cases (`hr`, `blockquote`) are dead code against it, not one. Corrected above.
+Also corrected in the same pass: the test-line/case count (`md-view.spec.ts` had grown to
+128 lines and 15 cases since the 119/14 figure was written, from an unrelated later fix
+round) and the Task 5 line-count figure quoted in the Summary (267, a pre-fix number —
+the actual, still-current total across all four component files is 282, matching the
+figure already correct elsewhere in this section). None of these corrections change the
+verdict — the corpus still needed no construct it didn't produce, `hr` and `blockquote`
+both remain in the `@switch` for the same reason (a document with either construct exists
+in principle), and the composition approach's cost/benefit case is unchanged.
+
+---
+
 ## Summary
 
-**Hook firings:** 6 total — 3 true positives, 3 false positives, 0 noise. (The
-"BG004 remedy text is wrong" and "NG001 addendum" entries above are analysis of firings
-already counted here, not additional firings — they document *why* a counted firing's
-remedy or scope is wrong, not a new trigger event.)
+**Hook firings:** 7 total — 2 true positives, 5 false positives, 0 noise. **The ruleset fired
+wrongly more often than it fired rightly on this project** — stated plainly rather than left
+implicit in a tally.
 
-- True positives (3): NG007 (Task 1, deliberate probe), BG004 (Task 1, `npx ng test --run`
-  — correctly blocked bare-watch-mode risk, though its own suggested fix text is wrong for
-  this toolchain), NG103 (Task 4, advisory, `@Injectable({providedIn:'root'})` →
-  `@Service()`).
-- False positives (3): NG001 (Task 3), NG001 (Task 7), BG004 (controller, `ng test --help`).
+This count was corrected three times in this final fix wave. First, the original log counted
+an entry — `npx ng test --run` (Task 1) — as a true-positive firing that "correctly blocked"
+the command. It did not: BG004's own guard source (`bash-guard.sh:135-136`) explicitly exempts
+`--run` from its block condition, so that command was accepted, not blocked. Nothing fired.
+That entry has been moved to "Defects that are not hook firings" above and merged with the
+related "remedy text is wrong" entry, since both describe the same underlying defect — BG004's
+*advice*, not its *trigger*, is broken for this toolchain. Removing it drops the count to 5 (2
+true positives, 3 false positives). Second, writing this fix wave's own blocker-5 regression
+test (a 5-column-table fixture, quoting NG001's trigger text as sample data) reproduced the
+NG001 false positive a third time, live, in this session. Third, this fix wave's own `git
+commit` describing the first correction above was itself blocked by BG004 — the commit message
+prose mentioning `"npx ng test --run"` matched the bare-text trigger, and the exemption check
+failed only because `--run` was followed by a closing quote rather than whitespace, `=`, or
+end-of-line, which the exemption regex requires. Both are genuine new firings, bringing the
+total to 7: 2 true positives, 5 false positives. (The "NG001 addendum" entry above is analysis
+of firings already counted here, not an additional firing — it documents *why* the false
+positives recur, not a new trigger event.)
+
+- True positives (2): NG007 (Task 1, deliberate probe), NG103 (Task 4, advisory,
+  `@Injectable({providedIn:'root'})` → `@Service()`).
+- False positives (5): NG001 (Task 3), NG001 (Task 7), NG001 (final fix wave, `rules.spec.ts`),
+  BG004 (controller, `ng test --help`), BG004 (final fix wave, `git commit` message prose).
 - Noise (0): every firing was either a genuine catch or a genuine miss; nothing fired
   correctly on content not worth interrupting for.
 
 **Rules that fired at all:** NG007, NG001, NG103, BG004 — 4 of the plugin's 30 rules (24
 `check_ng*` functions in `hook-lint.sh` plus 6 `BG*` guards in `bash-guard.sh`). The other
-26 never triggered across nine implementation tasks plus this controller session. That is
-expected for rules like NG002 (`@NgModule`) and NG011 (`.mutate()`) that only fire on code
-no one writing modern Angular would produce — but it is worth stating plainly rather than
-waving past: Tasks 2, 5, 6, and Task 7's fix round produced **zero** firings between them,
+26 never triggered across nine implementation tasks plus this controller session and the final
+fix wave. That is expected for rules like NG002 (`@NgModule`) and NG011 (`.mutate()`) that only
+fire on code no one writing modern Angular would produce — but it is worth stating plainly rather
+than waving past: Tasks 2, 5, 6, and Task 7's fix round produced **zero** firings between them,
 and Task 5 was the single most template-heavy piece of work in the project — 4 components,
-267 lines, landing squarely in the territory NG003 (native control flow), NG005, NG008
+282 lines, landing squarely in the territory NG003 (native control flow), NG005, NG008
 (`[class.x]` not `ngClass`), NG009 (`host` object not `@HostBinding`), NG013 (`@for` track),
 and NG014 live in. Silence there is not an absence of a result; it is the result — it is
 what correct signals-first, template-driven Angular looks like to this ruleset when nobody
@@ -433,7 +555,7 @@ turns on, not in what any individual rule catches once it is on.
 ### Verdict on NG014
 
 See "NG014 verdict — is a blocking `[innerHTML]` ban workable?" above (written by Task 5,
-corrected twice under review). Short version: **workable as a blocking rule.** Rendering
+corrected three times under review). Short version: **workable as a blocking rule.** Rendering
 nine real skill documents — including 60% of content blocks carrying inline markup —
 needed 4 small, independently testable components (282 lines) against a ~5-line rejected
 alternative (`[innerHTML]` + `bypassSecurityTrustHtml`), a real cost, but every line earned
@@ -459,27 +581,39 @@ same conclusion independently: the ban was expensive in lines but not in quality
 prevented a real unsanitized-HTML pathway from ever existing in this codebase.
 
 The case against, stated as plainly: every *false* signal in this log was self-inflicted by
-the plugin's own implementation gaps, not by ambiguity in what "correct Angular" means. Two
-NG001 false positives came from one uncorrected root cause (spec files never exempted from a
-bare-text regex) that the plugin's own author already half-solved with `is_spec()` and then
-applied to only 4 of 24 rules. Two BG004 firings were true positives with a documented
-factual error in the remedy text — a user who trusts the fix message hits a second wall with
-no signal that the *advice*, not their setup, is wrong. And the largest cost this project
-paid to the plugin was not a blocking rule at all: it was the skill set's own silence on how
-to test the async primitives it mandates (`httpResource`, `@defer`), which downstream shipped
-defective test code in **six of nine tasks** — vacuous "never throws" assertions, a
-nonexistent `TestBed.whenStable()` call, a mismatched default-branch test, a flat "nested
-list" test, and synchronous callbacks racing microtask-resolved resources. Every one of those
-was caught by review, none by the plugin's own hooks or skills, because nothing in
-`testing-essentials` covers the primitives `data-loading` and `performance-and-zoneless`
-mandate. A plugin that teaches you to author a pattern and stops short of teaching you to
-verify it has handed you half a contract.
+the plugin's own implementation gaps, not by ambiguity in what "correct Angular" means. Three
+NG001 false positives — the third one reproduced live during this very fix wave, while writing
+a regression test for an unrelated blocker — came from one uncorrected root cause (spec files
+never exempted from a bare-text regex) that the plugin's own author already half-solved with
+`is_spec()` and then applied to only 4 of 24 rules. Both of the plugin's actual BG004 firings
+were false positives — `ng test --help` (which cannot hang a session at all) and, in this very
+fix wave, a `git commit` whose message merely *described* `ng test --run` in prose, blocked
+because BG004 scans raw command text for the bare substring with no awareness of quoting or
+heredoc content, the same defect class as the NG001 false positives above. A related defect —
+BG004's remedy text recommending a `--run` flag that does not work on this toolchain, verified
+directly against this workspace's builder — is real but is not a firing at all, since BG004's
+own guard exempts `--run` and never blocks it. Either way, a user who trusts that remedy text
+hits a second wall with no signal that the *advice*, not their setup, is wrong. And the largest
+cost this project paid to
+the plugin was not a blocking rule at all: it was the skill set's own silence on how to test
+the async primitives it mandates (`httpResource`, `@defer`), which downstream shipped defective
+test code in **six of nine tasks** — vacuous "never throws" assertions, a nonexistent
+`TestBed.whenStable()` call, a mismatched default-branch test, a flat "nested list" test, and
+synchronous callbacks racing microtask-resolved resources. Only two of those five defect kinds
+— the nonexistent `TestBed.whenStable()` call and the synchronous callbacks racing
+microtask-resolved resources — trace directly to the skills' silence on async primitives. The
+other three — the vacuous "never throws" assertions (Tasks 2 and 3) and the tautological
+`@default`-branch test and flat "nested list" test (both Task 5) — are ordinary
+unfalsifiable-test defects unrelated to async timing at all, a general pattern the skills also
+do not address. Every one of the six was caught by review, none by the plugin's own hooks or
+skills, because nothing in `testing-essentials` covers either gap.
 
 Net: the blocking and advisory rules that actually ran — NG007, NG001, NG103, BG004 — earned
 their keep or, where they didn't, failed in ways that are cheap to fix (an `is_spec()` call,
 a corrected remedy string, an argument exclusion) rather than ways that indict the underlying
 idea. The skill-guidance gap is the more serious finding of the two, because it isn't a bug
 in a regex — it's a structural blind spot in what the plugin considers its job to cover, and
-it cost more real defects across this project than every hook firing combined. If
-`angular-guide` closes that gap, this log supports keeping the plugin as-is; if it doesn't,
-the next project built under it should expect the same six-of-nine pattern to repeat.
+it cost more real defects across this project than every hook firing combined, even after
+narrowing that count to the two defect kinds actually caused by it. If `angular-guide` closes
+that gap, this log supports keeping the plugin as-is; if it doesn't, the next project built
+under it should expect the same pattern to repeat.

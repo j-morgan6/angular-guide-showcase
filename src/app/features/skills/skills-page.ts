@@ -1,5 +1,5 @@
 import { Component, computed, inject, signal } from '@angular/core';
-import { GithubApi } from '../../core/github/github-api';
+import { GithubApi, isRateLimitedResource, rateLimitResetOf } from '../../core/github/github-api';
 import { lexMarkdown, stripFrontmatter } from '../../core/parsing/markdown';
 import { ErrorState } from '../../ui/state/error-state';
 import { LoadingSkeleton } from '../../ui/state/loading-skeleton';
@@ -46,8 +46,9 @@ const SKILLS = [
           <loading-skeleton [rows]="8" />
         } @else if (doc.error(); as err) {
           <error-state
-            [rateLimited]="api.isRateLimited()"
+            [rateLimited]="limited()"
             [message]="messageOf(err)"
+            [resetAt]="resetAt()"
             (retry)="doc.reload()"
           />
         } @else if (tokens().length > 0) {
@@ -91,6 +92,17 @@ export default class SkillsPage {
   protected readonly tokens = computed(() =>
     lexMarkdown(stripFrontmatter(this.doc.value() ?? '')),
   );
+
+  /**
+   * `GithubApi.isRateLimited()` folds only the four root resources — this
+   * page's `doc` resource is created per-skill and is not one of them, so a
+   * skill document that 403s after the root resources already succeeded
+   * would otherwise show as an ordinary failure instead of "rate limited".
+   * OR the two rather than duplicating the 403/header check here.
+   */
+  protected readonly limited = computed(() => this.api.isRateLimited() || isRateLimitedResource(this.doc));
+
+  protected readonly resetAt = computed(() => rateLimitResetOf(this.doc) ?? this.api.rateLimitResetAt());
 
   protected messageOf(err: unknown): string {
     return err instanceof Error ? err.message : 'Request failed.';

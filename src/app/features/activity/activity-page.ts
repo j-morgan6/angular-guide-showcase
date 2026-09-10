@@ -26,6 +26,7 @@ import { ContributorCard } from './contributor-card';
       <error-state
         [rateLimited]="api.isRateLimited()"
         [message]="messageOf(err)"
+        [resetAt]="api.rateLimitResetAt()"
         (retry)="api.commits.reload()"
       />
     } @else {
@@ -36,6 +37,13 @@ import { ContributorCard } from './contributor-card';
       <h2>Contributors</h2>
       @if (api.contributors.isLoading()) {
         <loading-skeleton [rows]="2" />
+      } @else if (api.contributors.error(); as err) {
+        <error-state
+          [rateLimited]="api.isRateLimited()"
+          [message]="messageOf(err)"
+          [resetAt]="api.rateLimitResetAt()"
+          (retry)="api.contributors.reload()"
+        />
       } @else {
         <div class="contributors">
           @for (person of api.contributors.value() ?? []; track person.login) {

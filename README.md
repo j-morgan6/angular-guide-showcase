@@ -52,9 +52,11 @@ are created once at root scope (`GithubApi`, `@Service()`) and reused across nav
 a normal browsing session stays well inside that budget without a manual cache.
 
 If the limit is hit, the footer shows a "GitHub rate limit reached" notice and each affected
-section renders `error-state` with a rate-limit explanation instead of a generic failure
-message — the two are deliberately distinct, since a rate-limited user needs to know to
-wait, not to retry harder.
+section — including `/activity`'s deferred contributors block and `/skills`'s per-skill
+document, not just the four root resources — renders `error-state` with a rate-limit
+explanation and, when GitHub's `x-ratelimit-reset` header is present, the local time it
+resets at, instead of a generic failure message. The two are deliberately distinct, since a
+rate-limited user needs to know to wait, not to retry harder.
 
 ## Why this exists
 

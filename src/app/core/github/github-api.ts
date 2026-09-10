@@ -1,5 +1,5 @@
 import { computed, Service, type Signal } from '@angular/core';
-import { httpResource } from '@angular/common/http';
+import { httpResource, type HttpResourceRef } from '@angular/common/http';
 import { decodeBase64 } from '../parsing/base64';
 import type { Commit, Contributor, RepoMeta } from './github.types';
 
@@ -16,6 +16,34 @@ function str(value: unknown): string {
 
 function num(value: unknown): number {
   return typeof value === 'number' ? value : 0;
+}
+
+/**
+ * True when a resource failed with GitHub's rate-limit signature: a 403 whose
+ * `x-ratelimit-remaining` header is zero. An ordinary 403 or a 500 is not
+ * rate limiting, and conflating them would produce a misleading message.
+ *
+ * Exported so any resource created outside this service — a per-skill
+ * document, for instance — can be folded into the same check instead of a
+ * second, drifting copy of this condition.
+ */
+export function isRateLimitedResource(res: HttpResourceRef<unknown>): boolean {
+  return res.statusCode() === 403 && res.headers()?.get('x-ratelimit-remaining') === '0';
+}
+
+/**
+ * The Unix-epoch seconds at which a rate-limited resource's quota resets, per
+ * `x-ratelimit-reset`. Returns undefined when the resource isn't rate limited
+ * or the header is missing/unparseable, so callers fall back to vaguer
+ * copy rather than rendering `Invalid Date`.
+ */
+export function rateLimitResetOf(res: HttpResourceRef<unknown>): number | undefined {
+  if (!isRateLimitedResource(res)) {
+    return undefined;
+  }
+  const header = res.headers()?.get('x-ratelimit-reset');
+  const seconds = header ? Number(header) : NaN;
+  return Number.isFinite(seconds) ? seconds : undefined;
 }
 
 @Service()
@@ -83,9 +111,20 @@ export class GithubApi {
   });
 
   /**
-   * True when any resource failed with GitHub's rate-limit signature: a 403
-   * whose `x-ratelimit-remaining` header is zero. An ordinary 403 or a 500 is
-   * not rate limiting, and conflating them would produce a misleading message.
+   * The four root resources. `isRateLimited`/`rateLimitResetAt` fold over
+   * exactly this list — a per-skill document created by `skillDoc()` is not
+   * a member, so callers holding one must OR it in themselves via the
+   * exported `isRateLimitedResource`/`rateLimitResetOf` helpers.
+   */
+  private readonly rootResources: readonly HttpResourceRef<unknown>[] = [
+    this.repo,
+    this.commits,
+    this.contributors,
+    this.readme,
+  ];
+
+  /**
+   * True when any root resource failed with GitHub's rate-limit signature.
    *
    * Driven off `statusCode()`/`headers()` rather than digging into `error()`:
    * `HttpResourceImpl`'s error handler (`@angular/common/http`) sets both
@@ -93,10 +132,24 @@ export class GithubApi {
    * are populated at the same time `error()` is.
    */
   readonly isRateLimited: Signal<boolean> = computed(() =>
-    [this.repo, this.commits, this.contributors, this.readme].some(
-      (res) => res.statusCode() === 403 && res.headers()?.get('x-ratelimit-remaining') === '0',
-    ),
+    this.rootResources.some(isRateLimitedResource),
   );
+
+  /**
+   * The Unix-epoch seconds at which the rate limit resets, from whichever
+   * root resource actually hit it — undefined when nothing is rate limited
+   * or none of the rate-limited responses carried a parseable
+   * `x-ratelimit-reset` header.
+   */
+  readonly rateLimitResetAt: Signal<number | undefined> = computed(() => {
+    for (const res of this.rootResources) {
+      const reset = rateLimitResetOf(res);
+      if (reset !== undefined) {
+        return reset;
+      }
+    }
+    return undefined;
+  });
 
   /**
    * A single skill document, keyed on a signal so the resource refetches on

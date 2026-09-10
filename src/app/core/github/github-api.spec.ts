@@ -6,7 +6,7 @@ import {
   type TestRequest,
 } from '@angular/common/http/testing';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { GithubApi } from './github-api';
+import { GithubApi, isRateLimitedResource, rateLimitResetOf } from './github-api';
 
 const REPO_URL = 'https://api.github.com/repos/j-morgan6/angular-guide';
 const COMMITS_URL = 'https://api.github.com/repos/j-morgan6/angular-guide/commits?per_page=30';
@@ -153,5 +153,71 @@ describe('GithubApi', () => {
     req.flush('boom', { status: 500, statusText: 'Server Error' });
     await Promise.resolve();
     expect(api.isRateLimited()).toBe(false);
+  });
+
+  it('exposes the reset time from x-ratelimit-reset when a resource is rate limited', async () => {
+    const req = takeAndDrainRest((r) => r.request.url === REPO_URL);
+    req.flush('rate limited', {
+      status: 403,
+      statusText: 'Forbidden',
+      headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1234567890' },
+    });
+    await Promise.resolve();
+    expect(api.rateLimitResetAt()).toBe(1234567890);
+  });
+
+  it('leaves the reset time undefined when the header is missing', async () => {
+    const req = takeAndDrainRest((r) => r.request.url === REPO_URL);
+    req.flush('rate limited', {
+      status: 403,
+      statusText: 'Forbidden',
+      headers: { 'x-ratelimit-remaining': '0' },
+    });
+    await Promise.resolve();
+    expect(api.rateLimitResetAt()).toBeUndefined();
+  });
+
+  it('leaves the reset time undefined when the header is present but unparseable', async () => {
+    const req = takeAndDrainRest((r) => r.request.url === REPO_URL);
+    req.flush('rate limited', {
+      status: 403,
+      statusText: 'Forbidden',
+      headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': 'not-a-number' },
+    });
+    await Promise.resolve();
+    expect(api.rateLimitResetAt()).toBeUndefined();
+  });
+});
+
+describe('isRateLimitedResource / rateLimitResetOf (exported helpers)', () => {
+  /**
+   * A minimal stand-in for HttpResourceRef, exercising only the two signals
+   * the helpers read. Confirms the predicate and reset-parser are usable on
+   * a resource GithubApi never created itself — the whole point of
+   * exporting them (blocker 2: SkillsPage's per-skill `doc` resource).
+   */
+  function fakeResource(statusCode: number | undefined, headers: Record<string, string>) {
+    return {
+      statusCode: () => statusCode,
+      headers: () => ({ get: (name: string) => headers[name] ?? null }),
+    } as unknown as Parameters<typeof isRateLimitedResource>[0];
+  }
+
+  it('is true only for a 403 with zero remaining', () => {
+    expect(isRateLimitedResource(fakeResource(403, { 'x-ratelimit-remaining': '0' }))).toBe(true);
+    expect(isRateLimitedResource(fakeResource(403, { 'x-ratelimit-remaining': '5' }))).toBe(false);
+    expect(isRateLimitedResource(fakeResource(500, { 'x-ratelimit-remaining': '0' }))).toBe(false);
+    expect(isRateLimitedResource(fakeResource(undefined, {}))).toBe(false);
+  });
+
+  it('parses the reset header only when the resource is actually rate limited', () => {
+    const limited = fakeResource(403, {
+      'x-ratelimit-remaining': '0',
+      'x-ratelimit-reset': '42',
+    });
+    expect(rateLimitResetOf(limited)).toBe(42);
+
+    const notLimited = fakeResource(500, { 'x-ratelimit-reset': '42' });
+    expect(rateLimitResetOf(notLimited)).toBeUndefined();
   });
 });

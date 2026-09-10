@@ -90,6 +90,21 @@ describe('parseRules', () => {
     const withNoise = README + '\n| Notes | x | y | z |\n';
     expect(parseRules(withNoise).map((r) => r.id)).not.toContain('Notes');
   });
+
+  // Reproduces a real upstream shape: a 5-column table with the same rule-ID
+  // first cell. Against the old `row.length < 4` guard this silently
+  // mis-maps every field one column to the left (fix shows trigger text,
+  // gate shows fix text) instead of being rejected — no error, no parse
+  // message, just wrong data in confident-looking cards. `row.length !== 4`
+  // rejects it outright so `parseRulesOrThrow` can throw the legible
+  // RuleParseError the spec promises for exactly this shape.
+  it('rejects a 5-column table rather than mis-mapping columns positionally', () => {
+    const fiveColumn =
+      '| ID | Since | Catches | Fix | Gate |\n|---|---|---|---|---|\n' +
+      '| NG001 | v1.0 | `standalone` property set to `true` in a decorator | Delete the property. | v20+ |\n';
+    expect(parseRules(fiveColumn)).toEqual([]);
+    expect(() => parseRulesOrThrow(fiveColumn)).toThrow(RuleParseError);
+  });
 });
 
 describe('parseRulesOrThrow', () => {

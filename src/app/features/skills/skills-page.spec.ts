@@ -77,6 +77,56 @@ describe('SkillsPage', () => {
     expect(text).toContain('RxJS Interop');
   });
 
+  /**
+   * Blocker 2: `GithubApi.isRateLimited()` only folds the four root
+   * resources (repo/commits/contributors/readme), which fetch once at
+   * bootstrap and can still hold an earlier success while a *later* skill
+   * request 403s mid-browse. Before the fix, this scenario rendered the
+   * generic "Couldn't load this" / "Try again" failure copy instead of the
+   * rate-limit explanation — the exact "retry harder" failure error-state
+   * exists to prevent. This test flushes the four root resources
+   * successfully first, then 403s only the skill document, so it can only
+   * pass if SkillsPage folds the skill resource's own rate-limit signature
+   * into what it shows — it fails against the pre-fix page, which shows
+   * the generic failure copy instead.
+   */
+  it('shows the rate-limit explanation when only the skill document 403s, even though the root resources already loaded', async () => {
+    const fixture = TestBed.createComponent(SkillsPage);
+    fixture.detectChanges();
+
+    // Drain whatever root requests GithubApi issued at construction, all
+    // succeeding — this is the "quota was healthy at bootstrap" precondition.
+    http.match(() => true).forEach((req) => {
+      if (req.request.url.includes('/contents/README.md')) {
+        req.flush({ content: btoa('# ok'), encoding: 'base64' });
+      } else if (req.request.url.includes('/contributors')) {
+        req.flush([]);
+      } else if (req.request.url.includes('/commits')) {
+        req.flush([]);
+      } else {
+        req.flush({});
+      }
+    });
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    fixture.componentInstance.select('testing-essentials');
+    fixture.detectChanges();
+    http
+      .expectOne((r) => r.url.includes('skills/testing-essentials/SKILL.md'))
+      .flush('rate limited', {
+        status: 403,
+        statusText: 'Forbidden',
+        headers: { 'x-ratelimit-remaining': '0' },
+      });
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('rate limit');
+    expect(text).not.toContain("Couldn't load this");
+  });
+
   it('never renders raw HTML from a skill document', async () => {
     const fixture = TestBed.createComponent(SkillsPage);
     fixture.detectChanges();
