@@ -9,6 +9,8 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { GithubApi } from './github-api';
 
 const REPO_URL = 'https://api.github.com/repos/j-morgan6/angular-guide';
+const COMMITS_URL = 'https://api.github.com/repos/j-morgan6/angular-guide/commits?per_page=30';
+const CONTRIBUTORS_URL = 'https://api.github.com/repos/j-morgan6/angular-guide/contributors';
 
 describe('GithubApi', () => {
   let api: GithubApi;
@@ -66,6 +68,73 @@ describe('GithubApi', () => {
     req.flush({ content: btoa('# Hello'), encoding: 'base64' });
     await Promise.resolve();
     expect(api.readme.value()).toBe('# Hello');
+  });
+
+  it('parses commits, keeping the top-level author separate from the commit author, and surviving a null author', async () => {
+    const req = takeAndDrainRest((r) => r.request.url === COMMITS_URL);
+    req.flush([
+      {
+        sha: 'abc1234567890def1234567890abcdef12345678',
+        commit: {
+          message: 'Add rate-limit detection\n\nLonger body explaining why.',
+          author: { name: 'Ada Lovelace', date: '2026-09-07T12:00:00Z' },
+        },
+        author: { login: 'ada', avatar_url: 'https://avatars.example.com/ada.png' },
+        html_url: 'https://github.com/j-morgan6/angular-guide/commit/abc1234567890def1234567890abcdef12345678',
+      },
+      {
+        // GitHub sends `author: null` when the commit's email isn't linked to any
+        // GitHub account — the common real-world case this narrowing exists for.
+        sha: 'def4567890abc1234567890def1234567890abcdef',
+        commit: {
+          message: 'Fix typo',
+          author: { name: 'Grace Hopper', date: '2026-09-06T08:30:00Z' },
+        },
+        author: null,
+        html_url: 'https://github.com/j-morgan6/angular-guide/commit/def4567890abc1234567890def1234567890abcdef',
+      },
+    ]);
+    await Promise.resolve();
+
+    const commits = api.commits.value();
+    expect(commits?.[0]).toEqual({
+      sha: 'abc1234',
+      message: 'Add rate-limit detection',
+      authorName: 'Ada Lovelace',
+      authorAvatarUrl: 'https://avatars.example.com/ada.png',
+      date: '2026-09-07T12:00:00Z',
+      url: 'https://github.com/j-morgan6/angular-guide/commit/abc1234567890def1234567890abcdef12345678',
+    });
+    expect(commits?.[1]).toEqual({
+      sha: 'def4567',
+      message: 'Fix typo',
+      authorName: 'Grace Hopper',
+      authorAvatarUrl: '',
+      date: '2026-09-06T08:30:00Z',
+      url: 'https://github.com/j-morgan6/angular-guide/commit/def4567890abc1234567890def1234567890abcdef',
+    });
+  });
+
+  it('parses contributors', async () => {
+    const req = takeAndDrainRest((r) => r.request.url === CONTRIBUTORS_URL);
+    req.flush([
+      {
+        login: 'ada',
+        avatar_url: 'https://avatars.example.com/ada.png',
+        contributions: 42,
+        html_url: 'https://github.com/ada',
+      },
+    ]);
+    await Promise.resolve();
+
+    expect(api.contributors.value()).toEqual([
+      {
+        login: 'ada',
+        avatarUrl: 'https://avatars.example.com/ada.png',
+        contributions: 42,
+        url: 'https://github.com/ada',
+      },
+    ]);
   });
 
   it('reports rate limiting when a 403 carries zero remaining', async () => {
