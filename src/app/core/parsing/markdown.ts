@@ -24,6 +24,34 @@ export function lexMarkdown(src: string): MdToken[] {
   }
 }
 
+/**
+ * Strips a leading YAML frontmatter block (`---` ... `---`) from markdown
+ * source. Only a delimiter that opens the document is treated as
+ * frontmatter — a `---` appearing later, e.g. a genuine horizontal rule, is
+ * left untouched, and a leading `---` with no matching close is left
+ * untouched too (it is not frontmatter, just an opening rule).
+ *
+ * This is a content decision, not a transport concern (`GithubApi.skillDoc`
+ * should not own it) and not `MdView`'s concern either (it must stay
+ * content-agnostic and render whatever tokens it is given) — so it lives
+ * here as its own pure function, applied by the caller that knows the
+ * content is a SKILL.md.
+ */
+export function stripFrontmatter(src: string): string {
+  if (!src.startsWith('---')) {
+    return src;
+  }
+  const lines = src.split('\n');
+  if (lines[0].trim() !== '---') {
+    return src;
+  }
+  const closingIndex = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
+  if (closingIndex === -1) {
+    return src;
+  }
+  return lines.slice(closingIndex + 1).join('\n');
+}
+
 /** Best-effort plain text for a token, for fallback rendering and assertions. */
 export function tokenText(token: MdToken): string {
   if ('text' in token && typeof token.text === 'string') {
