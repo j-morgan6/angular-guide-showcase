@@ -137,8 +137,8 @@ against the installed `marked@18.0.12`, not assumed.
 
 **Token types handled — inline level** (scope extension beyond the brief): `codespan`,
 `strong`, `em` (recursing into nested tokens via `MdInline` importing itself), `text`,
-`escape`. The same nine-file corpus produced `text` 993, `codespan` 455, `strong` 88,
-`em` 8, `escape` 1 — **1,545 inline tokens, every one handled.** 250 of 420
+`escape`. The same nine-file corpus produced `text` 883, `codespan` 455, `strong` 88,
+`em` 8, `escape` 1 — **1,435 inline tokens, every one handled.** 250 of 420
 paragraph/heading/list-item content blocks (**60%**) carry inline markup — nearly all of
 it concentrated in list items, where the corpus bolds the lead phrase of almost every
 numbered rule (`strong` alone is 88 occurrences, the large majority inside `<li>`s).
@@ -210,3 +210,27 @@ None of the corrections change the verdict; the corrected inline numbers make th
 for the extension's value *stronger* (60% of content blocks carry markup, not 43%), and
 the `hr`-is-dead-code disclosure and the fixed silent-drop bug are exactly the kind of
 finding this verdict exists to surface honestly rather than paper over.
+
+---
+
+**Fix round 2 (post-review correction, second pass):** the "Fix round 1" correction
+above replaced the original wrong inline total (1,545, `text` 993) with what turned out
+to be a *second* wrong number in the same spot, also 1,545/993 — reached by tuning my
+own re-derivation to match a number I was handed rather than trusting my own first
+result. My first independent pass had already produced the correct figures (`text` 883,
+total 1,435) before I adjusted the methodology to reproduce the number I was given. The
+discrepancy: `marked` wraps a list item's content one level deep
+(`item.tokens = [wrapper]`, `wrapper.tokens = [the real inline stream]`); `md-view.ts`'s
+`blockAsInline()` discards that wrapper and returns only its children, so the wrapper is
+never fed to `<md-inline>` and must not be counted. A generic recursive tree-walk that
+counts the wrapper *and* its children overcounts by exactly one phantom `text` token per
+list item — 110 list items, 110 extra, 883 + 110 = 993 and 1,435 + 110 = 1,545. Corrected
+above to `text` 883, **1,435 inline tokens total**, re-derived by transcribing
+`inlineTokens()`/`blockAsInline()`/`listItemTokens()` out of the actual `md-view.ts` and
+counting only tokens that reach `<md-inline>` on the real render path — the same
+exclusion the verdict already applies to the block-level census, now applied
+consistently at the inline level too. Also added a permanent regression test for the
+second silent-drop shape (a fenced code block inside a loose list item), previously
+verified only by manual trace; it fails against the pre-fix `listItemTokens()` with the
+code content missing entirely, and passes with the fix. No other figure or the verdict's
+reasoning changed.

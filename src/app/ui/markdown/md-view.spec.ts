@@ -53,6 +53,15 @@ describe('MdView', () => {
     expect(el.textContent).toContain('nested content here');
   });
 
+  it('renders a fenced code block inside a loose list item as visible text', () => {
+    // The old listItemTokens() returned [] for a `code` block (no inline
+    // `tokens` of its own), so its content vanished silently. This is the
+    // second silent-drop shape from the same bug, previously verified only
+    // by manual trace — it deserves a permanent regression test.
+    const el = render('- Step one\n\n  ```js\n  const a = 1;\n  ```\n');
+    expect(el.textContent).toContain('const a = 1;');
+  });
+
   it('renders an unhandled token as visible text rather than dropping it', () => {
     // A block-level `html` token is not in the @switch, so it must hit the
     // @default branch and still show its text. Verified against marked:
