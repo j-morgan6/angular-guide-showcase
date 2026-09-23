@@ -26,7 +26,7 @@ public final class RuleTableParser {
     private static final Pattern RULE_ID = Pattern.compile("^(BG|NG|SB)(\\d{3})$");
 
     /** A pipe that is not escaped and not inside a backtick span. */
-    private static final String ESCAPED_PIPE = "";  // cannot occur in markdown
+    private static final String ESCAPED_PIPE = "\u0001";  // cannot occur in markdown
 
     private RuleTableParser() {
     }
