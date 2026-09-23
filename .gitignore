@@ -49,3 +49,5 @@ Thumbs.db
 # Local SDD process files (not part of the shipped app)
 .superpowers/
 superpowers
+# ...but the committed design specs and plans under docs/ are deliverables
+!docs/superpowers/
