@@ -3,16 +3,10 @@ package com.jmorgan.showcase.github;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.Duration;
 import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
 
 import static org.mockito.BDDMockito.given;
@@ -20,23 +14,16 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+/**
+ * No manual GithubClientProperties bean here: ShowcaseApplication's class-level
+ * @EnableConfigurationProperties is still processed by @WebMvcTest (slice tests
+ * filter component scanning, not annotations on the detected
+ * @SpringBootConfiguration class itself), and application.yml's `github:` block
+ * is on the test classpath, so the slice binds the real properties
+ * (base-url, repos, sync-interval: PT6H) without any test-side stand-in.
+ */
 @WebMvcTest(SyncController.class)
-@Import(SyncControllerTest.Props.class)
 class SyncControllerTest {
-
-    @TestConfiguration
-    static class Props {
-        // @Primary: ShowcaseApplication's class-level @EnableConfigurationProperties
-        // is still processed by @WebMvcTest (slice tests filter component scanning,
-        // not annotations on the detected @SpringBootConfiguration class itself), so
-        // the real GithubClientProperties bean is registered alongside this one.
-        // Without @Primary that is a NoUniqueBeanDefinitionException.
-        @Bean
-        @Primary
-        GithubClientProperties githubClientProperties() {
-            return new GithubClientProperties("", "https://api.github.com", List.of(), Duration.ofHours(6));
-        }
-    }
 
     @MockitoBean
     private SyncService sync;
