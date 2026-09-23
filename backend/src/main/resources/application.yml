@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: showcase
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+github:
+  token: ${GITHUB_TOKEN:}
+  base-url: https://api.github.com
+  repos:
+    - j-morgan6/angular-guide
+    - j-morgan6/spring-boot-guide
+  sync-interval: PT6H
