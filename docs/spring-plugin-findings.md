@@ -788,3 +788,78 @@ endpoint) than the SB111 message itself would have.
 
 **Action:** fixed. See the `@EntityGraph` fix recorded in the SB111 entry's
 follow-up below.
+
+### SB012 — should have fired and did not, on `GITHUB_TOKEN` in `backend/compose.yaml` (Task 13, scope gap by design)
+
+**Code:** `backend/compose.yaml`, the `app` service added in Task 13:
+
+```yaml
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/showcase
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    ports:
+      - "8080:8080"
+```
+
+Written with `${GITHUB_TOKEN:-}` passthrough from the host environment —
+never a literal value — per the task brief's explicit instruction. This
+entry records the scope gap that instruction was flagging, reasoned from the
+rule's own implementation rather than from an actual violation: no literal
+secret was ever written to test it.
+
+**Verdict:** should have fired and did not (on a hypothetical literal — see
+"Why").
+
+**Why, traced against the rule's own implementation** (`check_sb012` in
+`hook-lint.sh`, `spring-boot-guide` v1.0.0):
+
+```bash
+check_sb012() {
+  is_config || return 0
+  is_main_config || return 0
+  ...
+```
+
+where
+
+```bash
+is_config()      { case "$EXT" in properties|yml|yaml) return 0 ;; *) return 1 ;; esac; }
+is_main_config() { printf '%s' "$FILE_PATH" | grep -q '/src/main/resources/'; }
+```
+
+`backend/compose.yaml` passes `is_config` — its extension is `yaml`, one of
+the three the check accepts — but fails `is_main_config`: its path is
+`backend/compose.yaml`, which contains no `/src/main/resources/` segment.
+`check_sb012` returns at the `is_main_config || return 0` line before it
+ever reads the file's content, so the `SECRET` regex
+(`^(password|secret|token|credential|api[-_.]?key|private[-_.]?key)$`
+matched against a stripped key) is never evaluated against this file at
+all — not "evaluated and found nothing," but categorically skipped. The
+same two-line gate (`is_config` then `is_main_config`) is shared by every
+other config-content check in the file (SB007, SB013, and the rest), so
+this is not an SB012-specific oversight; it is how the plugin scopes *all*
+config-content checks to `src/main/resources/`, the conventional home for
+Spring configuration. A hypothetical literal
+`GITHUB_TOKEN: ghp_xxxxxxxxxxxx` written into `backend/compose.yaml` in
+place of the `${GITHUB_TOKEN:-}` passthrough would satisfy the `SECRET` key
+pattern (`token` is in the alternation) exactly as it would in
+`application.yml` — the only thing standing between "caught" and "not
+caught" is which directory the file lives in, and Docker Compose files
+conventionally live at a project or service root, not under
+`src/main/resources/`.
+
+**Action:** none — the scope is by design (Spring config, not arbitrary
+YAML, is the plugin's stated territory) and no literal secret was written
+to exploit it. Recorded so Task 14's coverage audit knows this gap was
+identified and reasoned through, not missed: any Compose, Kubernetes, or
+other infra-adjacent YAML checked into this repository outside
+`src/main/resources/` gets zero SB012/SB007/SB013 coverage regardless of
+what it contains, and the only thing enforcing the `${GITHUB_TOKEN:-}`
+passthrough on `backend/compose.yaml` in practice was following the task
+brief, not a hook.

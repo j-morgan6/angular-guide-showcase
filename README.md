@@ -27,7 +27,14 @@ eager route fails the test suite, not just the hook):
 
 ## Local development
 
-The Angular workspace lives in `frontend/`.
+The repository is two independent halves: an Angular workspace in `frontend/` and a
+Spring Boot workspace in `backend/`. Neither depends on the other to build or test —
+the front end reads GitHub directly, and the backend (once running) reads GitHub
+through a sync job into its own Postgres database. Nothing in this repository is
+deployed today except the front end (see above); the backend is written, tested, and
+buildable, and is meant to be run locally.
+
+### Front end
 
 ```bash
 cd frontend
@@ -47,6 +54,41 @@ npx ng test --watch=false
 (`ng test` alone runs in watch mode and will hang a non-interactive shell; there is no
 `--run` flag on this toolchain's Vitest builder — see the BG004 entries in
 `docs/plugin-findings.md`.)
+
+### Backend
+
+The backend needs Postgres. `backend/compose.yaml` starts it:
+
+```bash
+cd backend
+docker compose up postgres
+```
+
+Then, **in your own terminal** (not from an agent session — `spring-boot:run` never
+exits, so an agent that runs it there hangs; see the BG004 entries in
+`docs/spring-plugin-findings.md`):
+
+```bash
+cd backend
+./mvnw spring-boot:run
+```
+
+The app comes up on `http://localhost:8080/`. `GITHUB_TOKEN` is optional — set it in
+your environment before running to raise GitHub's unauthenticated rate limit
+(60 requests/hour) during the sync job; without it, sync still works, just at that
+lower ceiling.
+
+To run the backend's own test suite (uses Testcontainers, so Docker must be running):
+
+```bash
+cd backend
+./mvnw -B verify
+```
+
+`backend/compose.yaml` also defines an `app` service that builds and runs the whole
+stack (`docker compose up`), but this project deliberately never runs it: writing and
+building the image is what this repository validates, not deploying it. See
+`docs/spring-plugin-findings.md` for the deployment-configuration findings.
 
 ## Live data, unauthenticated
 
