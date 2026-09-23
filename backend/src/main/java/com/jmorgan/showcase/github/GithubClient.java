@@ -6,6 +6,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.util.DefaultUriBuilderFactory;
+import org.springframework.web.util.UriUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -21,7 +23,10 @@ import java.util.List;
  * repoFullName ("owner/repo") is concatenated into the path rather than
  * passed as a {repo} URI template variable: RestClient's default encoding
  * mode percent-encodes "/" inside an expanded template variable, which would
- * turn "owner/repo" into "owner%2Frepo" and 404 every request.
+ * turn "owner/repo" into "owner%2Frepo" and 404 every request. Every
+ * concatenated value is routed through {@link #sanitizePath(String)} first,
+ * since path traversal segments and unencoded reserved characters would
+ * otherwise reach the request URI unchecked.
  */
 @Component
 public class GithubClient {
@@ -31,8 +36,16 @@ public class GithubClient {
     private final RestClient restClient;
 
     public GithubClient(RestClient.Builder builder, GithubClientProperties properties) {
+        // EncodingMode.NONE: every request URI below is built from segments this
+        // class already percent-encoded itself via sanitizePath(). RestClient's
+        // default TEMPLATE_AND_VALUES mode would otherwise apply a second,
+        // template-level encoding pass over the same (already-encoded) string,
+        // turning our "%20" into "%2520".
+        DefaultUriBuilderFactory uriBuilderFactory = new DefaultUriBuilderFactory(properties.baseUrl());
+        uriBuilderFactory.setEncodingMode(DefaultUriBuilderFactory.EncodingMode.NONE);
+
         RestClient.Builder configured = builder
-                .baseUrl(properties.baseUrl())
+                .uriBuilderFactory(uriBuilderFactory)
                 .defaultHeader(HttpHeaders.ACCEPT, "application/vnd.github+json");
         if (properties.token() != null && !properties.token().isBlank()) {
             configured = configured.defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + properties.token());
@@ -42,7 +55,7 @@ public class GithubClient {
 
     public GithubRepo fetchRepo(String repoFullName) {
         return restClient.get()
-                .uri("/repos/" + repoFullName)
+                .uri("/repos/" + sanitizePath(repoFullName))
                 .retrieve()
                 .body(GithubRepo.class);
     }
@@ -57,7 +70,7 @@ public class GithubClient {
     public String fetchFile(String repoFullName, String path) {
         try {
             GithubContent content = restClient.get()
-                    .uri("/repos/" + repoFullName + "/contents/" + path)
+                    .uri("/repos/" + sanitizePath(repoFullName) + "/contents/" + sanitizePath(path))
                     .retrieve()
                     .body(GithubContent.class);
             if (content == null || content.content() == null) {
@@ -73,7 +86,7 @@ public class GithubClient {
 
     public List<GithubCommit> fetchCommits(String repoFullName, int perPage) {
         GithubCommit[] commits = restClient.get()
-                .uri("/repos/" + repoFullName + "/commits?per_page={perPage}", perPage)
+                .uri("/repos/" + sanitizePath(repoFullName) + "/commits?per_page={perPage}", perPage)
                 .retrieve()
                 .body(GithubCommit[].class);
         return commits == null ? List.of() : List.of(commits);
@@ -81,7 +94,7 @@ public class GithubClient {
 
     public List<GithubContributor> fetchContributors(String repoFullName) {
         GithubContributor[] contributors = restClient.get()
-                .uri("/repos/" + repoFullName + "/contributors")
+                .uri("/repos/" + sanitizePath(repoFullName) + "/contributors")
                 .retrieve()
                 .body(GithubContributor[].class);
         return contributors == null ? List.of() : List.of(contributors);
@@ -91,7 +104,7 @@ public class GithubClient {
     public List<String> listSkillNames(String repoFullName) {
         try {
             GithubContent[] entries = restClient.get()
-                    .uri("/repos/" + repoFullName + "/contents/skills")
+                    .uri("/repos/" + sanitizePath(repoFullName) + "/contents/skills")
                     .retrieve()
                     .body(GithubContent[].class);
             if (entries == null) {
@@ -108,5 +121,33 @@ public class GithubClient {
             log.warn("Could not list skills for {}: {}", repoFullName, e.getStatusCode());
             return List.of();
         }
+    }
+
+    /**
+     * Sanitizes a slash-separated value before it is concatenated into a
+     * request URI. {@code repoFullName} is fixed today (two literals in
+     * application.yml), but {@code path} will not stay that way once
+     * SyncService starts building paths from directory names the GitHub API
+     * returns — third-party-controlled content, not a literal.
+     *
+     * Splits on "/", rejects the whole value if any segment is empty, "."
+     * or ".." (path traversal), then percent-encodes each remaining segment
+     * on its own so a space, "#" or "?" inside a segment cannot redirect or
+     * malform the request, while the "/" separators stay real path
+     * separators rather than becoming "%2F".
+     */
+    private static String sanitizePath(String value) {
+        String[] segments = value.split("/", -1);
+        StringBuilder sanitized = new StringBuilder();
+        for (String segment : segments) {
+            if (segment.isEmpty() || segment.equals(".") || segment.equals("..")) {
+                throw new IllegalArgumentException("Invalid path segment in \"" + value + "\"");
+            }
+            if (!sanitized.isEmpty()) {
+                sanitized.append('/');
+            }
+            sanitized.append(UriUtils.encodePathSegment(segment, StandardCharsets.UTF_8));
+        }
+        return sanitized.toString();
     }
 }

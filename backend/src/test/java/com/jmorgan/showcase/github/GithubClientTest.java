@@ -12,6 +12,7 @@ import java.util.Base64;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
@@ -84,5 +85,39 @@ class GithubClientTest {
                         """, MediaType.APPLICATION_JSON));
 
         assertThat(client.listSkillNames("j-morgan6/angular-guide")).containsExactly("data-loading");
+    }
+
+    @Test
+    void rejectsPathTraversalSegments() {
+        MockRestServiceServer[] server = new MockRestServiceServer[1];
+        GithubClient client = clientWith(server, "");
+
+        assertThatThrownBy(() -> client.fetchFile("j-morgan6/angular-guide", "../secrets.md"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void percentEncodesReservedCharactersInPathSegments() {
+        MockRestServiceServer[] server = new MockRestServiceServer[1];
+        GithubClient client = clientWith(server, "");
+
+        server[0].expect(requestTo(BASE + "/repos/j-morgan6/angular-guide/contents/my%20notes%23draft.md"))
+                .andRespond(withStatus(org.springframework.http.HttpStatus.NOT_FOUND));
+
+        assertThat(client.fetchFile("j-morgan6/angular-guide", "my notes#draft.md")).isEmpty();
+        server[0].verify();
+    }
+
+    @Test
+    void repoFullNameStillProducesTwoRealPathSegments() {
+        MockRestServiceServer[] server = new MockRestServiceServer[1];
+        GithubClient client = clientWith(server, "");
+
+        server[0].expect(requestTo(BASE + "/repos/j-morgan6/angular-guide/contributors"))
+                .andRespond(withSuccess("[]", MediaType.APPLICATION_JSON));
+
+        client.fetchContributors("j-morgan6/angular-guide");
+
+        server[0].verify();
     }
 }
