@@ -816,50 +816,80 @@ secret was ever written to test it.
 **Verdict:** should have fired and did not (on a hypothetical literal — see
 "Why").
 
-**Why, traced against the rule's own implementation** (`check_sb012` in
-`hook-lint.sh`, `spring-boot-guide` v1.0.0):
+**Why, traced against the rule's own implementation** (`hook-lint.sh`,
+`spring-boot-guide` v1.0.0) — there are two filters here, and the first,
+broader one is what actually stops `backend/compose.yaml`, not the
+`check_sb012` function itself.
+
+**First filter — script-level, by basename, `hook-lint.sh:126-134`:**
 
 ```bash
-check_sb012() {
-  is_config || return 0
-  is_main_config || return 0
-  ...
+EXT=$(printf '%s' "${FILE_PATH##*.}" | tr '[:upper:]' '[:lower:]')
+case "$EXT" in java|properties|yml|yaml) ;; *) exit 0 ;; esac
+
+# Config rules only ever apply to Spring's own config files.
+case "$EXT" in
+  properties|yml|yaml)
+    printf '%s' "$(basename "$FILE_PATH")" | grep -q '^application' || exit 0
+    ;;
+esac
 ```
 
-where
+This runs before any `check_sbNNN` function is even defined or called, and
+it is `exit 0` — terminating the *entire hook script process*, not a
+function-local `return`. `backend/compose.yaml` has extension `yaml` (passes
+the first `case`), but its basename is `compose.yaml`, which does not match
+`^application`, so the second `case` hits `exit 0` and the whole script
+exits immediately. `check_sb012`, `check_sb007`, `check_sb013` — every
+config-content check the script defines — never runs at all for this file;
+they are not reached, skipped, or short-circuited individually, the process
+is simply gone before they exist.
+
+**Second filter — function-level, by path, inside each individual check**
+(would only matter for a file that clears the first filter):
 
 ```bash
 is_config()      { case "$EXT" in properties|yml|yaml) return 0 ;; *) return 1 ;; esac; }
 is_main_config() { printf '%s' "$FILE_PATH" | grep -q '/src/main/resources/'; }
 ```
 
-`backend/compose.yaml` passes `is_config` — its extension is `yaml`, one of
-the three the check accepts — but fails `is_main_config`: its path is
-`backend/compose.yaml`, which contains no `/src/main/resources/` segment.
-`check_sb012` returns at the `is_main_config || return 0` line before it
-ever reads the file's content, so the `SECRET` regex
-(`^(password|secret|token|credential|api[-_.]?key|private[-_.]?key)$`
-matched against a stripped key) is never evaluated against this file at
-all — not "evaluated and found nothing," but categorically skipped. The
-same two-line gate (`is_config` then `is_main_config`) is shared by every
-other config-content check in the file (SB007, SB013, and the rest), so
-this is not an SB012-specific oversight; it is how the plugin scopes *all*
-config-content checks to `src/main/resources/`, the conventional home for
-Spring configuration. A hypothetical literal
-`GITHUB_TOKEN: ghp_xxxxxxxxxxxx` written into `backend/compose.yaml` in
-place of the `${GITHUB_TOKEN:-}` passthrough would satisfy the `SECRET` key
-pattern (`token` is in the alternation) exactly as it would in
-`application.yml` — the only thing standing between "caught" and "not
-caught" is which directory the file lives in, and Docker Compose files
-conventionally live at a project or service root, not under
-`src/main/resources/`.
+`check_sb012`, `check_sb007`, and `check_sb013` each open with
+`is_config || return 0` then `is_main_config || return 0`. For
+`backend/compose.yaml` this code is dead — the script-level `exit 0` above
+already ended the process — but it is the filter that would apply to a
+correctly-named file sitting in the wrong directory, e.g.
+`backend/application.yml` living outside `src/main/resources/`.
 
-**Action:** none — the scope is by design (Spring config, not arbitrary
-YAML, is the plugin's stated territory) and no literal secret was written
-to exploit it. Recorded so Task 14's coverage audit knows this gap was
-identified and reasoned through, not missed: any Compose, Kubernetes, or
-other infra-adjacent YAML checked into this repository outside
-`src/main/resources/` gets zero SB012/SB007/SB013 coverage regardless of
-what it contains, and the only thing enforcing the `${GITHUB_TOKEN:-}`
-passthrough on `backend/compose.yaml` in practice was following the task
-brief, not a hook.
+**The blind spot in its true form:** it is not "config files outside
+`src/main/resources/`. It is **any config file whose basename does not
+start with `application`, regardless of where it lives** — the basename
+gate is checked first and is stricter than the path gate, since it applies
+even inside `src/main/resources/`. A file at
+`src/main/resources/db-secrets.yml`, correctly placed under Spring's own
+config root and containing a literal credential
+(`password: hunter2`), would still get **zero** SB007/SB012/SB013 coverage:
+its basename `db-secrets.yml` fails `^application` at the script-level
+`exit 0` before `is_main_config` — which it would otherwise pass — is ever
+reached. `backend/compose.yaml` fails both filters; `db-secrets.yml` in
+the correct directory fails only the first, which is enough on its own.
+A hypothetical literal `GITHUB_TOKEN: ghp_xxxxxxxxxxxx` written into
+`backend/compose.yaml` in place of the `${GITHUB_TOKEN:-}` passthrough
+would satisfy the `SECRET` key pattern
+(`^(password|secret|token|credential|api[-_.]?key|private[-_.]?key)$`,
+`token` is in the alternation) exactly as it would in `application.yml` —
+but neither filter is about that pattern matching; both are about whether
+the script ever reads the file's content at all.
+
+**Action:** none — no literal secret was written to exploit it. Recorded so
+Task 14's coverage audit knows this gap was identified and reasoned through
+at the right layer, not missed: the fix that would close it is widening the
+script-level basename filter at `hook-lint.sh:126-134` (e.g. to also accept
+`compose*.yml`/`docker-compose*.yml`, or dropping the basename requirement
+in favor of the existing path-based `is_main_config` check alone) — not
+adding directories to `is_main_config`, which a correctly-named,
+wrongly-placed file would already satisfy once past the first gate. As
+written, any config file not named `application.{properties,yml,yaml}` is
+unexamined by every config-content rule (SB007, SB012, SB013), wherever it
+sits, and the only thing enforcing the `${GITHUB_TOKEN:-}` passthrough on
+`backend/compose.yaml` in practice was following the task brief, not a
+hook.
