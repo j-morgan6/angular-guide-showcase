@@ -4042,7 +4042,7 @@ Changes:
 - Truncate in the template — `{{ commit.sha.slice(0, 7) }}` — or add a `shortSha` computed. Do not truncate server-side; the full sha is the useful value to store and link.
 - Replace the rate-limit bindings with `[stale]`/`[syncError]` as in Task 11.
 
-`contributor-card.ts` keeps its bound `[src]` avatar exactly as is — the existing NG104 finding about `ngSrc` and bound URLs stands, and changing it now would obscure that record.
+`contributor-card.ts` keeps its avatar binding exactly as is. (Earlier drafts of this plan claimed an existing NG104 finding here; there is none. The NG104 block in the 2026-09-10 design doc was an *illustrative example* of the findings-entry format, not a recorded finding, and the component already uses `[ngSrc]`, so NG104 cannot fire on it. Left untouched simply because it is out of scope.)
 
 - [ ] **Step 4: Update both specs**
 
