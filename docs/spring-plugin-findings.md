@@ -434,6 +434,106 @@ match — the transaction boundary was placed on `CatalogService`
 (`@Transactional(readOnly = true)` at class level) as the brief specified.
 **Action:** none.
 
+### SB106 — false positive, "activity" field vs. package segment collision (Task 10)
+**Code:** `private final ActivityService activity;` in
+`backend/src/main/java/com/jmorgan/showcase/activity/ActivityController.java` —
+the field is declared `final`, exactly as the brief specifies.
+**Verbatim output:**
+```
+⚠️  SB106: Constructor-injected field is not `final`.
+   💡 Fix: Declare it `private final`.
+   `final` documents that the dependency is fixed for the life of the bean and lets the compiler prove nothing reassigns it. It also makes accidental field injection impossible to add later without noticing.
+   See: spring-boot-essentials skill
+```
+**Verdict:** false positive — the same package-statement-collision mechanism
+recorded for Task 8's `github`/`GithubClient` field and Task 9's
+`catalog`/`CatalogService` field, now reproduced a third time in
+`com.jmorgan.showcase.activity`. `check_sb106` scans the whole file for the
+first line matching `^[^\n;]*\bNAME\s*(?:;|=)` outside a method/constructor
+body; for a field named `activity` in a package whose last segment is also
+`activity`, that first match is `package com.jmorgan.showcase.activity;`, not
+the real `private final ActivityService activity;` declaration further down.
+This is the exact firing the task instructions predicted in advance
+("Expect it on a field named ... `activity` in `...activity`"), and it landed
+exactly as predicted.
+**Negative-case corroboration, same task:** `FindingService`/`FindingController`
+in package `com.jmorgan.showcase.finding` both declare a field named
+`findings` (plural), not `finding`. Neither write produced any SB106 output —
+consistent with the traced mechanism requiring an *exact* string match
+between the field name and the package's last segment; `findings` != `finding`
+never lets the package-statement line satisfy `\bNAME\b` for that field.
+**Action:** none — no code change. The field is genuinely `final` as
+committed; renaming it to dodge the hook would evade the rule's intent rather
+than satisfy it, which the task brief prohibits. Third independent occurrence
+of the same structural bug, further strengthening the case (see Task 8/Task 9
+entries above) for a plugin fix that excludes `package`/`import` statement
+lines from SB106's declaration scan.
+
+### SB111 — should have fired and did not, on FindingService.toDto's N+1 (Task 10, deliberate experiment)
+**Code:** `backend/src/main/java/com/jmorgan/showcase/finding/FindingService.java`,
+written verbatim from the brief:
+```java
+public List<FindingDto> findings(String ruleKey) {
+    List<Finding> found = (ruleKey == null || ruleKey.isBlank())
+            ? findings.findAllByOrderByRecordedAtDesc()
+            : findings.findByRuleRuleKey(ruleKey);
+    return found.stream().map(FindingService::toDto).toList();
+}
+
+private static FindingDto toDto(Finding finding) {
+    Rule rule = finding.getRule();
+    return new FindingDto(
+            rule.getRuleId(),
+            rule.getPlugin().getSlug(),
+            ...
+```
+`toDto` walks `finding.getRule()` then `.getPlugin().getSlug()` for every row
+returned by a repository read — two lazy `@ManyToOne` proxies initialized per
+row, a textbook N+1 that only "works" because `FindingService` carries
+`@Transactional(readOnly = true)` at class level.
+**Verdict:** should have fired and did not.
+**Why, traced against the rule's own implementation** (`check_sb111` in
+`hook-lint.sh`, `spring-boot-guide` v1.0.0): the check requires (1) a
+`.findAll|findBy...|getAll(` call somewhere in the file — present here
+(`findAllByOrderByRecordedAtDesc`, `findByRuleRuleKey`) — and (2) a
+`for\s*\(\s*TYPE\s+VAR\s*:` loop whose body (next 400 flattened characters)
+contains `VAR.getXxx().size()/.stream()/.forEach()/.iterator()`. Our code has
+no `for (...)` loop at all — it's `found.stream().map(FindingService::toDto)`,
+a method reference over a `Stream` pipeline — so the for-loop regex never
+matches anything in the file, the script falls through to its final
+`sys.exit(1)`, and `check_sb111`'s `|| return 0` swallows that as "nothing to
+report." This is consistent with the rule's documented limits, not beyond
+them: its own comment reads "Narrow, same-file, best-effort (spec 11.3): a
+repository read, then a for-each whose body walks a collection off the loop
+variable. The real case often spans three files and will be missed; widening
+this would cost false positives on every correct loop." Two things push our
+shape doubly outside that pattern rather than marginally outside it: (a) no
+`for` statement exists in the file at all (a `.stream().map()` pipeline is a
+different AST shape the regex was never written to see), and (b) even the
+body-matching regex is keyed to *collection*-walking terminal calls
+(`size`/`stream`/`forEach`/`iterator`) — our leak is a *to-one* lazy-proxy
+walk ending in a scalar getter (`.getPlugin().getSlug()`), which is a
+different N+1 mechanism (`@ManyToOne` proxy initialization) than the one the
+rule's name and message describe ("a collection association walked inside a
+loop"). SB111 is architecturally scoped to collection-association N+1, and
+this is a to-one-chain N+1; it is arguably outside the rule's intended target
+entirely, not just outside its regex's syntactic reach.
+**Action:** none yet — left as written per the task's required sequence. The
+`jpa-review` agent was dispatched next against this same code (see "Agent
+reviews (Task 10, Step 3)" below) before any fix was applied. Following that
+agent's confirmation, fixed by adding
+`@EntityGraph(attributePaths = {"rule", "rule.plugin"})` to both
+`findByRuleRuleKey` and `findAllByOrderByRecordedAtDesc` in
+`backend/src/main/java/com/jmorgan/showcase/finding/FindingRepository.java`,
+exactly as both the brief and the agent's own suggested fix specify.
+Re-verified: writing the edited `FindingRepository.java` produced no
+`PreToolUse`/`PostToolUse` hook output, and `./mvnw test` is 36/36 green
+afterward (`FindingService`/`FindingController` have no dedicated unit test
+of their own in this task — `FindingController`'s handler is exercised only
+indirectly via the full-suite compile+boot; the DTO shape and the N+1 fix
+itself are covered by the `jpa-review` agent's static analysis rather than a
+new repository-level query-count test, which Task 10 does not add).
+
 ---
 
 ## Agent reviews (Task 4, Step 9)
@@ -614,3 +714,77 @@ intentional). Package organization was reconfirmed consistent with the Task
 4 baseline (`catalog` feature-first, `config/CorsConfig` correctly the one
 cross-cutting concern outside a feature package).
 **Verdict:** true negative on all of the above — agree; nothing to add.
+
+## Agent reviews (Task 10, Step 3) — SB111 vs. jpa-review on the same N+1
+
+Per the task brief, `spring-boot-guide:jpa-review` was dispatched against
+`backend/src/main/java/` with `FindingService.toDto`'s lazy walk still in
+place (no `@EntityGraph`, no join fetch) — the exact defect the SB111 entry
+above records as a miss. This is the comparison the experiment exists for: a
+per-file regex advisory hook versus a cross-file reasoning agent, against the
+identical, unmodified code.
+
+### jpa-review — dispatched against backend/src/main/java/ (N+1 still present)
+**Verbatim output (trimmed to the primary finding):**
+> **1. N+1 in `FindingService.toDto` — the one you flagged, confirmed and
+> it's a double N+1**
+>
+> `Finding.rule` is `@ManyToOne(fetch = LAZY)` (`Finding.java:26-28`), and
+> `Rule.plugin` is also `@ManyToOne(fetch = LAZY)` (`Rule.java:25-27`).
+> Neither `findAllByOrderByRecordedAtDesc()` nor `findByRuleRuleKey(...)` in
+> `FindingRepository.java:9-11` uses a fetch join or `@EntityGraph`. So for a
+> result of N findings, `toDto` walks `finding.getRule()` then
+> `rule.getPlugin()` for every row, producing up to **2N+1 queries** (1 for
+> the findings list, up to N for distinct rules, up to N more for distinct
+> plugins) per call to `GET /api/findings` in `FindingController.java:21-24`
+> — a plain, unparameterized list endpoint with no pagination. This is the
+> textbook cross-file N+1 the single-file SB111-style heuristic can't see:
+> the lazy annotation is in `Finding.java`, the second lazy annotation is in
+> `Rule.java`, and the loop that dereferences both is in
+> `FindingService.java`.
+>
+> **Fix:** add a fetch join or `@EntityGraph` to both repository methods so
+> `rule` and `rule.plugin` are loaded in the same query:
+> ```java
+> @EntityGraph(attributePaths = {"rule", "rule.plugin"})
+> List<Finding> findByRuleRuleKey(String ruleKey);
+>
+> @EntityGraph(attributePaths = {"rule", "rule.plugin"})
+> List<Finding> findAllByOrderByRecordedAtDesc();
+> ```
+
+Also reported, lower priority: `Finding` has no `equals`/`hashCode` override
+(unlike every other entity in the codebase) — not currently exercised by any
+`Set`/`Map` usage, flagged proactively, not urgent; and a write-path N+1 shape
+in `RepoSyncer`'s per-loop-iteration lookups, explicitly out of scope for a
+read-path mandate and not ranked as a finding. Everything else (fetch
+strategy across the whole entity graph, migration-to-entity column mapping,
+`@Transactional(readOnly = true)` placement) was checked and reported clean.
+
+**Verdict:** true positive — agree, and the agent's analysis goes further
+than the brief's own framing: it correctly identifies this as a *double* N+1
+(the `Finding→Rule` hop and the `Rule→Plugin` hop chain together), not a
+single one, and correctly locates the unbounded `GET /api/findings` endpoint
+as the reason it matters in production rather than treating it as a
+theoretical concern.
+
+**Comparison with SB111 (see entry above, same code, same commit-in-progress):**
+SB111 did not fire on this exact code — its regex requires an explicit
+`for (...)` loop syntax in the same file as the repository call, and our
+code is a `.stream().map(methodReference)` pipeline with the dereferencing
+logic in a separate `private static` method, so neither the loop-shape check
+nor (independently) the collection-terminal-call check
+(`size`/`stream`/`forEach`/`iterator`) had anything to match — this N+1 walks
+scalar-returning to-one associations, not a collection. jpa-review needed
+none of that syntactic scaffolding: it traced the `@ManyToOne(fetch = LAZY)`
+declarations in `Finding.java` and `Rule.java`, followed the call chain into
+`FindingService.java`, and reasoned about what the JPA runtime actually does
+at that call site regardless of loop syntax. This is exactly the shape the
+task set out to demonstrate: a same-file, best-effort regex hook is
+mechanically blind to an N+1 that spans a `.stream()` pipeline and two
+entity files, while a cross-file reasoning agent catches it directly — and,
+in this run, characterizes it more precisely (double N+1, unbounded
+endpoint) than the SB111 message itself would have.
+
+**Action:** fixed. See the `@EntityGraph` fix recorded in the SB111 entry's
+follow-up below.
