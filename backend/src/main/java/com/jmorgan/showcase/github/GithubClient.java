@@ -36,13 +36,14 @@ public class GithubClient {
     private final RestClient restClient;
 
     public GithubClient(RestClient.Builder builder, GithubClientProperties properties) {
-        // EncodingMode.NONE: every request URI below is built from segments this
-        // class already percent-encoded itself via sanitizePath(). RestClient's
-        // default TEMPLATE_AND_VALUES mode would otherwise apply a second,
-        // template-level encoding pass over the same (already-encoded) string,
-        // turning our "%20" into "%2520".
+        // EncodingMode.VALUES_ONLY, not NONE or the TEMPLATE_AND_VALUES default:
+        // VALUES_ONLY skips the template-string pre-encoding pass that double-
+        // encoded our already-sanitizePath()-encoded segments (that pass fires
+        // only under TEMPLATE_AND_VALUES/URI_COMPONENT), while still strictly
+        // encoding any {var} template variable expanded later (e.g. {perPage}),
+        // which NONE would silently stop protecting.
         DefaultUriBuilderFactory uriBuilderFactory = new DefaultUriBuilderFactory(properties.baseUrl());
-        uriBuilderFactory.setEncodingMode(DefaultUriBuilderFactory.EncodingMode.NONE);
+        uriBuilderFactory.setEncodingMode(DefaultUriBuilderFactory.EncodingMode.VALUES_ONLY);
 
         RestClient.Builder configured = builder
                 .uriBuilderFactory(uriBuilderFactory)
