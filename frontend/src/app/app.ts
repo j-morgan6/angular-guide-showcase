@@ -1,6 +1,6 @@
 import { Component, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
-import { GithubApi } from './core/github/github-api';
+import { ShowcaseApi } from './core/api/showcase-api';
 
 @Component({
   selector: 'app-root',
@@ -28,10 +28,10 @@ import { GithubApi } from './core/github/github-api';
         <a href="https://github.com/j-morgan6/angular-guide" target="_blank" rel="noopener noreferrer">
           j-morgan6/angular-guide
         </a>
-        live via the GitHub API, unauthenticated.
+        through a Spring Boot backend that syncs from GitHub.
       </p>
-      @if (api.isRateLimited()) {
-        <p class="limited">GitHub rate limit reached — data may be incomplete until it resets.</p>
+      @if (api.isStale()) {
+        <p class="limited">Backend sync data may be out of date — {{ api.syncError() ?? 'last sync failed' }}.</p>
       }
     </footer>
   `,
@@ -61,5 +61,5 @@ import { GithubApi } from './core/github/github-api';
   `,
 })
 export class App {
-  protected readonly api = inject(GithubApi);
+  protected readonly api = inject(ShowcaseApi);
 }

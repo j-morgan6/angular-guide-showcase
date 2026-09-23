@@ -6,9 +6,41 @@ import {
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
 import { describe, expect, it, beforeEach } from 'vitest';
+import type { Commit, Contributor, SyncStatus } from '../../core/api/showcase.types';
 import ActivityPage from './activity-page';
 
-const REPO_URL = 'https://api.github.com/repos/j-morgan6/angular-guide';
+const RULES_URL = '/api/plugins/spring-boot-guide/rules';
+const SKILLS_URL = '/api/plugins/spring-boot-guide/skills';
+const COMMITS_URL = '/api/plugins/spring-boot-guide/activity/commits';
+const CONTRIBUTORS_URL = '/api/plugins/spring-boot-guide/activity/contributors';
+const SYNC_STATUS_URL = '/api/sync/status';
+
+// Full-length, not pre-truncated — the backend sends the whole sha.
+const COMMITS_FIXTURE: Commit[] = [
+  {
+    sha: 'abcdef1234567890abcdef1234567890abcdef12',
+    message: 'feat: thing',
+    authorName: 'Joseph Morgan',
+    authorAvatarUrl: 'https://avatars.example/1',
+    url: 'https://github.com/x',
+    authoredAt: '2026-09-07T00:00:00Z',
+  },
+];
+
+const CONTRIBUTORS_FIXTURE: Contributor[] = [
+  { login: 'j-morgan6', avatarUrl: 'https://avatars.example/1', url: 'https://github.com/j-morgan6', contributions: 41 },
+];
+
+function freshSyncStatus(): SyncStatus {
+  return {
+    status: 'succeeded',
+    startedAt: null,
+    finishedAt: null,
+    rulesSynced: 0,
+    error: null,
+    stale: false,
+  };
+}
 
 describe('ActivityPage', () => {
   let http: HttpTestingController;
@@ -21,39 +53,39 @@ describe('ActivityPage', () => {
     http = TestBed.inject(HttpTestingController);
   });
 
-  function flushAll() {
-    http
-      .expectOne((r) => r.url === REPO_URL)
-      .flush({ name: 'angular-guide', stargazers_count: 4, forks_count: 1, open_issues_count: 0, pushed_at: '2026-09-07T00:00:00Z', description: 'd' });
-    http.expectOne((r) => r.url.includes('/commits')).flush([
-      {
-        sha: 'abcdef1234',
-        html_url: 'https://github.com/x',
-        commit: { message: 'feat: thing\n\nbody', author: { name: 'Joseph Morgan', date: '2026-09-07T00:00:00Z' } },
-        author: { avatar_url: 'https://avatars.example/1' },
-      },
-    ]);
-    http.expectOne((r) => r.url.includes('/contributors')).flush([
-      { login: 'j-morgan6', avatar_url: 'https://avatars.example/1', contributions: 41, html_url: 'https://github.com/j-morgan6' },
-    ]);
+  /** Drains the two `ShowcaseApi` resources this page doesn't primarily exercise. */
+  function drainOtherEagerResources(syncStatus: SyncStatus = freshSyncStatus()): void {
+    http.expectOne(RULES_URL).flush([]);
+    http.expectOne(SKILLS_URL).flush([]);
+    http.expectOne(SYNC_STATUS_URL).flush(syncStatus);
   }
 
-  it('renders commits with their short sha and subject line only', async () => {
+  function flushActivity(commits: Commit[], contributors: Contributor[]): void {
+    http.expectOne(COMMITS_URL).flush(commits);
+    http.expectOne(CONTRIBUTORS_URL).flush(contributors);
+  }
+
+  it('renders commits with their short sha and no stale notice while fresh', async () => {
     const fixture = TestBed.createComponent(ActivityPage);
     fixture.detectChanges();
-    flushAll();
+    drainOtherEagerResources();
+    flushActivity(COMMITS_FIXTURE, CONTRIBUTORS_FIXTURE);
     await Promise.resolve();
     fixture.detectChanges();
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('abcdef1');
+    expect(text).not.toContain(COMMITS_FIXTURE[0].sha);
     expect(text).toContain('feat: thing');
-    expect(text).not.toContain('body');
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('stale-notice'),
+    ).toBeNull();
   });
 
   it('renders contributor cards once the deferred block is rendered', async () => {
     const fixture = TestBed.createComponent(ActivityPage);
     fixture.detectChanges();
-    flushAll();
+    drainOtherEagerResources();
+    flushActivity(COMMITS_FIXTURE, CONTRIBUTORS_FIXTURE);
     fixture.detectChanges();
 
     const [block] = await fixture.getDeferBlocks();
@@ -67,23 +99,16 @@ describe('ActivityPage', () => {
   });
 
   /**
-   * Blocker 3: the deferred contributors block had only an isLoading branch
-   * and an @else that rendered `api.contributors.value() ?? []` — a 403 or
-   * 500 collapsed into the same empty grid as a repo with genuinely no
-   * contributors, indistinguishable from each other. This test flushes the
-   * contributors request with a failure and can only pass if the template
-   * has a distinct failure branch rendering error-state; against the
-   * pre-fix template it renders an empty `.contributors` grid with no
-   * error-state and no failure text.
+   * Blocker 3 (Task 11 lineage): the deferred contributors block must have a
+   * distinct failure branch rendering error-state, not silently fall back to
+   * an empty grid indistinguishable from "no contributors".
    */
   it('renders error-state, not a silently-empty grid, when the contributors request fails', async () => {
     const fixture = TestBed.createComponent(ActivityPage);
     fixture.detectChanges();
-    http
-      .expectOne((r) => r.url === REPO_URL)
-      .flush({ name: 'angular-guide', stargazers_count: 4, forks_count: 1, open_issues_count: 0, pushed_at: '2026-09-07T00:00:00Z', description: 'd' });
-    http.expectOne((r) => r.url.includes('/commits')).flush([]);
-    http.expectOne((r) => r.url.includes('/contributors')).flush('boom', {
+    drainOtherEagerResources();
+    http.expectOne(COMMITS_URL).flush([]);
+    http.expectOne(CONTRIBUTORS_URL).flush('boom', {
       status: 500,
       statusText: 'Server Error',
     });
@@ -100,23 +125,29 @@ describe('ActivityPage', () => {
     expect(el.querySelector('.contributors')).toBeNull();
   });
 
-  it('shows repo metadata as distinct stats, not just any digit on the page', async () => {
+  it('shows a stale-data notice above the commits when the last sync failed, even though everything loaded', async () => {
     const fixture = TestBed.createComponent(ActivityPage);
     fixture.detectChanges();
-    flushAll();
+    drainOtherEagerResources({
+      status: 'failed',
+      startedAt: null,
+      finishedAt: null,
+      rulesSynced: 0,
+      error: 'connection refused',
+      stale: true,
+    });
+    flushActivity(COMMITS_FIXTURE, CONTRIBUTORS_FIXTURE);
     await Promise.resolve();
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    const stats = new Map<string, string>();
-    el.querySelectorAll('.stats > div').forEach((row) => {
-      const label = row.querySelector('dt')?.textContent?.trim() ?? '';
-      const value = row.querySelector('dd')?.textContent?.trim() ?? '';
-      stats.set(label, value);
-    });
-
-    expect(stats.get('Stars')).toBe('4');
-    expect(stats.get('Forks')).toBe('1');
-    expect(stats.get('Open issues')).toBe('0');
+    expect(el.querySelector('stale-notice')).not.toBeNull();
+    const text = el.textContent ?? '';
+    expect(text).toContain('out of date');
+    expect(text).toContain('connection refused');
+    // The commits themselves loaded fine — degraded, not failed, so the
+    // list still renders alongside the notice.
+    expect(el.querySelector('commit-list')).not.toBeNull();
+    expect(el.querySelector('error-state')).toBeNull();
   });
 });

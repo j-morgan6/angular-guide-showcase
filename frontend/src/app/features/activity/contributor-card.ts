@@ -1,6 +1,6 @@
 import { Component, input } from '@angular/core';
 import { NgOptimizedImage } from '@angular/common';
-import type { Contributor } from '../../core/github/github.types';
+import type { Contributor } from '../../core/api/showcase.types';
 
 @Component({
   selector: 'contributor-card',

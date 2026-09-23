@@ -1,26 +1,16 @@
-import { Component, computed, input, output } from '@angular/core';
+import { Component, input, output } from '@angular/core';
 
 /**
- * Loading, rate-limited and failed are deliberately distinct. Collapsing them
- * into one generic error is what the data-loading skill warns against: a user
- * who is rate limited needs to know to wait, not to retry harder.
+ * Loading, stale and failed are deliberately distinct. Collapsing them into
+ * one generic error is what the data-loading skill warns against: a user
+ * looking at stale-but-successful data needs to know it may be out of date,
+ * not that the request failed.
  */
 @Component({
   selector: 'error-state',
   template: `
-    <div class="box" role="alert" [class.limited]="rateLimited() || stale()">
-      @if (rateLimited()) {
-        <h3>GitHub rate limit reached</h3>
-        <p>
-          This dashboard reads the GitHub API without a token, which allows
-          60 requests per hour per IP.
-          @if (resetLabel(); as at) {
-            The limit resets at {{ at }}.
-          } @else {
-            The limit resets within the hour.
-          }
-        </p>
-      } @else if (stale()) {
+    <div class="box" role="alert" [class.limited]="stale()">
+      @if (stale()) {
         <h3>Data may be out of date</h3>
         <p>{{ syncError() ?? "The last sync from GitHub hasn't completed successfully." }}</p>
       } @else {
@@ -53,38 +43,15 @@ import { Component, computed, input, output } from '@angular/core';
   `,
 })
 export class ErrorState {
-  readonly rateLimited = input.required<boolean>();
   readonly message = input.required<string>();
-  /** Unix-epoch seconds from `x-ratelimit-reset`, when known. */
-  readonly resetAt = input<number | undefined>(undefined);
   /**
    * True when the backend's data is not fresh — the last sync failed, or is
-   * older than the sync interval allows. Additive alongside `rateLimited`:
-   * pages still reading from GitHub bind `rateLimited`/`resetAt`, pages
-   * reading from the showcase backend bind `stale`/`syncError` instead.
+   * older than the sync interval allows. This is the *failure*-path stale
+   * indication (the fetch itself also failed); a successful-but-stale fetch
+   * is shown by the separate `stale-notice` component instead.
    */
   readonly stale = input(false);
   /** The error from the last failed sync, shown in place of the generic stale copy when present. */
   readonly syncError = input<string | undefined>(undefined);
   readonly retry = output<void>();
-
-  /**
-   * `HH:MM` in the viewer's local time, or undefined when there is no reset
-   * time to show — either because none was given, or because it didn't parse
-   * to a valid date. Undefined falls back to the vaguer "within the hour"
-   * copy in the template rather than rendering `Invalid Date`.
-   */
-  protected readonly resetLabel = computed<string | undefined>(() => {
-    const reset = this.resetAt();
-    if (reset === undefined) {
-      return undefined;
-    }
-    const date = new Date(reset * 1000);
-    if (Number.isNaN(date.getTime())) {
-      return undefined;
-    }
-    const hh = String(date.getHours()).padStart(2, '0');
-    const mm = String(date.getMinutes()).padStart(2, '0');
-    return `${hh}:${mm}`;
-  });
 }

@@ -1,22 +1,19 @@
 import { Component, inject } from '@angular/core';
-import { GithubApi } from '../../core/github/github-api';
+import { ShowcaseApi } from '../../core/api/showcase-api';
 import { ErrorState } from '../../ui/state/error-state';
 import { LoadingSkeleton } from '../../ui/state/loading-skeleton';
+import { StaleNotice } from '../../ui/state/stale-notice';
 import { CommitList } from './commit-list';
 import { ContributorCard } from './contributor-card';
 
 @Component({
   selector: 'activity-page',
-  imports: [CommitList, ContributorCard, ErrorState, LoadingSkeleton],
+  imports: [CommitList, ContributorCard, ErrorState, LoadingSkeleton, StaleNotice],
   template: `
     <h1>Activity</h1>
 
-    @if (api.repo.value(); as repo) {
-      <dl class="stats">
-        <div><dt>Stars</dt><dd>{{ repo.stars }}</dd></div>
-        <div><dt>Forks</dt><dd>{{ repo.forks }}</dd></div>
-        <div><dt>Open issues</dt><dd>{{ repo.openIssues }}</dd></div>
-      </dl>
+    @if (api.isStale() && !api.commits.error()) {
+      <stale-notice [syncError]="api.syncError()" />
     }
 
     <h2>Recent commits</h2>
@@ -24,9 +21,9 @@ import { ContributorCard } from './contributor-card';
       <loading-skeleton [rows]="6" />
     } @else if (api.commits.error(); as err) {
       <error-state
-        [rateLimited]="api.isRateLimited()"
         [message]="messageOf(err)"
-        [resetAt]="api.rateLimitResetAt()"
+        [stale]="api.isStale()"
+        [syncError]="api.syncError()"
         (retry)="api.commits.reload()"
       />
     } @else {
@@ -39,9 +36,9 @@ import { ContributorCard } from './contributor-card';
         <loading-skeleton [rows]="2" />
       } @else if (api.contributors.error(); as err) {
         <error-state
-          [rateLimited]="api.isRateLimited()"
           [message]="messageOf(err)"
-          [resetAt]="api.rateLimitResetAt()"
+          [stale]="api.isStale()"
+          [syncError]="api.syncError()"
           (retry)="api.contributors.reload()"
         />
       } @else {
@@ -57,10 +54,8 @@ import { ContributorCard } from './contributor-card';
   `,
   styles: `
     :host { display: block; }
-    .stats { display: flex; gap: 2rem; margin: 0 0 2rem; }
-    .stats dt { color: var(--text-2); font-size: 0.8rem; }
-    .stats dd { margin: 0.1rem 0 0; font-size: 1.4rem; font-weight: 600; }
     h2 { font-size: 1.1rem; margin: 2rem 0 0.75rem; }
+    h2:first-of-type { margin-top: 0; }
     .contributors {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
@@ -70,7 +65,7 @@ import { ContributorCard } from './contributor-card';
   `,
 })
 export default class ActivityPage {
-  protected readonly api = inject(GithubApi);
+  protected readonly api = inject(ShowcaseApi);
 
   protected messageOf(err: unknown): string {
     return err instanceof Error ? err.message : 'Request failed.';

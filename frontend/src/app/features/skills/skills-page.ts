@@ -1,42 +1,36 @@
 import { Component, computed, inject, signal } from '@angular/core';
-import { GithubApi, isRateLimitedResource, rateLimitResetOf } from '../../core/github/github-api';
+import { ShowcaseApi } from '../../core/api/showcase-api';
 import { lexMarkdown, stripFrontmatter } from '../../core/parsing/markdown';
 import { ErrorState } from '../../ui/state/error-state';
 import { LoadingSkeleton } from '../../ui/state/loading-skeleton';
+import { StaleNotice } from '../../ui/state/stale-notice';
 import { MdView } from '../../ui/markdown/md-view';
-
-const SKILLS = [
-  'angular-essentials',
-  'component-architecture',
-  'data-loading',
-  'performance-and-zoneless',
-  'project-structure',
-  'rxjs-interop',
-  'signals-essentials',
-  'state-management',
-  'testing-essentials',
-] as const;
 
 @Component({
   selector: 'skills-page',
-  imports: [MdView, ErrorState, LoadingSkeleton],
+  imports: [MdView, ErrorState, LoadingSkeleton, StaleNotice],
   template: `
     <h1>Skills</h1>
     <p class="lede">
-      The nine judgment-layer skills, rendered from their SKILL.md files by composing
-      components over a markdown token tree — no HTML string is ever built.
+      The plugin's judgment-layer skills, rendered from their SKILL.md files by composing
+      components over a markdown token tree — no HTML string is ever built. The list comes
+      from the backend, so a new skill appears here without a front-end change.
     </p>
+
+    @if (api.isStale() && !doc.error()) {
+      <stale-notice [syncError]="api.syncError()" />
+    }
 
     <div class="layout">
       <nav aria-label="Skills">
-        @for (name of skills; track name) {
+        @for (skill of skills(); track skill.name) {
           <button
             type="button"
             data-skill
-            [class.active]="selected() === name"
-            (click)="select(name)"
+            [class.active]="selected() === skill.name"
+            (click)="select(skill.name)"
           >
-            {{ name }}
+            {{ skill.name }}
           </button>
         }
       </nav>
@@ -46,9 +40,9 @@ const SKILLS = [
           <loading-skeleton [rows]="8" />
         } @else if (doc.error(); as err) {
           <error-state
-            [rateLimited]="limited()"
             [message]="messageOf(err)"
-            [resetAt]="resetAt()"
+            [stale]="api.isStale()"
+            [syncError]="api.syncError()"
             (retry)="doc.reload()"
           />
         } @else if (tokens().length > 0) {
@@ -81,8 +75,8 @@ const SKILLS = [
   `,
 })
 export default class SkillsPage {
-  protected readonly api = inject(GithubApi);
-  protected readonly skills = SKILLS;
+  protected readonly api = inject(ShowcaseApi);
+  protected readonly skills = computed(() => this.api.skills.value());
 
   private readonly selectedState = signal<string | undefined>(undefined);
   protected readonly selected = this.selectedState.asReadonly();
@@ -90,19 +84,8 @@ export default class SkillsPage {
   protected readonly doc = this.api.skillDoc(this.selectedState.asReadonly());
 
   protected readonly tokens = computed(() =>
-    lexMarkdown(stripFrontmatter(this.doc.value() ?? '')),
+    lexMarkdown(stripFrontmatter(this.doc.value()?.body ?? '')),
   );
-
-  /**
-   * `GithubApi.isRateLimited()` folds only the four root resources — this
-   * page's `doc` resource is created per-skill and is not one of them, so a
-   * skill document that 403s after the root resources already succeeded
-   * would otherwise show as an ordinary failure instead of "rate limited".
-   * OR the two rather than duplicating the 403/header check here.
-   */
-  protected readonly limited = computed(() => this.api.isRateLimited() || isRateLimitedResource(this.doc));
-
-  protected readonly resetAt = computed(() => rateLimitResetOf(this.doc) ?? this.api.rateLimitResetAt());
 
   protected messageOf(err: unknown): string {
     return err instanceof Error ? err.message : 'Request failed.';

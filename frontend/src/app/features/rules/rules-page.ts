@@ -3,12 +3,13 @@ import { ShowcaseApi } from '../../core/api/showcase-api';
 import type { Rule } from '../../core/api/showcase.types';
 import { ErrorState } from '../../ui/state/error-state';
 import { LoadingSkeleton } from '../../ui/state/loading-skeleton';
+import { StaleNotice } from '../../ui/state/stale-notice';
 import { RuleCard } from './rule-card';
 import { RuleFilters, type KindFilter } from './rule-filters';
 
 @Component({
   selector: 'rules-page',
-  imports: [RuleCard, RuleFilters, ErrorState, LoadingSkeleton],
+  imports: [RuleCard, RuleFilters, ErrorState, LoadingSkeleton, StaleNotice],
   template: `
     <h1>Rules</h1>
     <p class="lede">
@@ -20,13 +21,15 @@ import { RuleFilters, type KindFilter } from './rule-filters';
       <loading-skeleton [rows]="6" />
     } @else if (failure(); as message) {
       <error-state
-        [rateLimited]="false"
         [message]="message"
         [stale]="api.isStale()"
         [syncError]="api.syncError()"
         (retry)="api.rules.reload()"
       />
     } @else {
+      @if (api.isStale()) {
+        <stale-notice [syncError]="api.syncError()" />
+      }
       <rule-filters
         [query]="query()"
         [kind]="kind()"

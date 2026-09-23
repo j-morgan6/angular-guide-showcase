@@ -5,7 +5,31 @@ import {
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
 import { describe, expect, it, beforeEach } from 'vitest';
+import type { SkillSummary, SyncStatus } from '../../core/api/showcase.types';
 import SkillsPage from './skills-page';
+
+const RULES_URL = '/api/plugins/spring-boot-guide/rules';
+const SKILLS_URL = '/api/plugins/spring-boot-guide/skills';
+const COMMITS_URL = '/api/plugins/spring-boot-guide/activity/commits';
+const CONTRIBUTORS_URL = '/api/plugins/spring-boot-guide/activity/contributors';
+const SYNC_STATUS_URL = '/api/sync/status';
+
+const SKILLS_FIXTURE: SkillSummary[] = [
+  { name: 'angular-essentials' },
+  { name: 'signals-essentials' },
+  { name: 'testing-essentials' },
+];
+
+function freshSyncStatus(): SyncStatus {
+  return {
+    status: 'succeeded',
+    startedAt: null,
+    finishedAt: null,
+    rulesSynced: 0,
+    error: null,
+    stale: false,
+  };
+}
 
 describe('SkillsPage', () => {
   let http: HttpTestingController;
@@ -17,33 +41,53 @@ describe('SkillsPage', () => {
     http = TestBed.inject(HttpTestingController);
   });
 
-  it('lists exactly the nine skill names, in order', () => {
+  /**
+   * `ShowcaseApi` creates five resources eagerly at construction. Every test
+   * drains the four this page doesn't primarily exercise (`rules`, `skills`,
+   * `commits`, `contributors`) with harmless bodies and flushes `syncStatus`
+   * with the given status, so it can exercise the skills list and the
+   * per-skill `doc` resource without leaving open requests behind.
+   */
+  function drainRootResources(syncStatus: SyncStatus = freshSyncStatus()): void {
+    http.expectOne(RULES_URL).flush([]);
+    http.expectOne(SKILLS_URL).flush(SKILLS_FIXTURE);
+    http.expectOne(COMMITS_URL).flush([]);
+    http.expectOne(CONTRIBUTORS_URL).flush([]);
+    http.expectOne(SYNC_STATUS_URL).flush(syncStatus);
+  }
+
+  it('lists the skills returned by the backend, in order, with no stale notice while fresh', async () => {
     const fixture = TestBed.createComponent(SkillsPage);
     fixture.detectChanges();
+    drainRootResources();
+    await Promise.resolve();
+    fixture.detectChanges();
+
     const buttons = Array.from(
       (fixture.nativeElement as HTMLElement).querySelectorAll('[data-skill]'),
     );
     expect(buttons.map((b) => b.textContent?.trim())).toEqual([
       'angular-essentials',
-      'component-architecture',
-      'data-loading',
-      'performance-and-zoneless',
-      'project-structure',
-      'rxjs-interop',
       'signals-essentials',
-      'state-management',
       'testing-essentials',
     ]);
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('stale-notice'),
+    ).toBeNull();
   });
 
   it('renders the selected skill document through the token renderer', async () => {
     const fixture = TestBed.createComponent(SkillsPage);
     fixture.detectChanges();
+    drainRootResources();
+    await Promise.resolve();
+    fixture.detectChanges();
+
     fixture.componentInstance.select('signals-essentials');
     fixture.detectChanges();
     http
-      .expectOne((r) => r.url.includes('skills/signals-essentials/SKILL.md'))
-      .flush({ content: btoa('## Decision table\n\nUse computed().'), encoding: 'base64' });
+      .expectOne((r) => r.url.includes('/skills/signals-essentials'))
+      .flush({ name: 'signals-essentials', body: '## Decision table\n\nUse computed().' });
     await Promise.resolve();
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;
@@ -54,6 +98,10 @@ describe('SkillsPage', () => {
   it('strips YAML frontmatter before rendering, so it never appears as content', async () => {
     const fixture = TestBed.createComponent(SkillsPage);
     fixture.detectChanges();
+    drainRootResources();
+    await Promise.resolve();
+    fixture.detectChanges();
+
     fixture.componentInstance.select('rxjs-interop');
     fixture.detectChanges();
     const frontmatterDoc = [
@@ -67,8 +115,8 @@ describe('SkillsPage', () => {
       'Body text.',
     ].join('\n');
     http
-      .expectOne((r) => r.url.includes('skills/rxjs-interop/SKILL.md'))
-      .flush({ content: btoa(frontmatterDoc), encoding: 'base64' });
+      .expectOne((r) => r.url.includes('/skills/rxjs-interop'))
+      .flush({ name: 'rxjs-interop', body: frontmatterDoc });
     await Promise.resolve();
     fixture.detectChanges();
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
@@ -77,64 +125,70 @@ describe('SkillsPage', () => {
     expect(text).toContain('RxJS Interop');
   });
 
-  /**
-   * Blocker 2: `GithubApi.isRateLimited()` only folds the four root
-   * resources (repo/commits/contributors/readme), which fetch once at
-   * bootstrap and can still hold an earlier success while a *later* skill
-   * request 403s mid-browse. Before the fix, this scenario rendered the
-   * generic "Couldn't load this" / "Try again" failure copy instead of the
-   * rate-limit explanation — the exact "retry harder" failure error-state
-   * exists to prevent. This test flushes the four root resources
-   * successfully first, then 403s only the skill document, so it can only
-   * pass if SkillsPage folds the skill resource's own rate-limit signature
-   * into what it shows — it fails against the pre-fix page, which shows
-   * the generic failure copy instead.
-   */
-  it('shows the rate-limit explanation when only the skill document 403s, even though the root resources already loaded', async () => {
+  it('shows the error state when the selected skill document request fails, even though the skills list loaded fine', async () => {
     const fixture = TestBed.createComponent(SkillsPage);
     fixture.detectChanges();
-
-    // Drain whatever root requests GithubApi issued at construction, all
-    // succeeding — this is the "quota was healthy at bootstrap" precondition.
-    http.match(() => true).forEach((req) => {
-      if (req.request.url.includes('/contents/README.md')) {
-        req.flush({ content: btoa('# ok'), encoding: 'base64' });
-      } else if (req.request.url.includes('/contributors')) {
-        req.flush([]);
-      } else if (req.request.url.includes('/commits')) {
-        req.flush([]);
-      } else {
-        req.flush({});
-      }
-    });
+    drainRootResources();
     await Promise.resolve();
     fixture.detectChanges();
 
     fixture.componentInstance.select('testing-essentials');
     fixture.detectChanges();
     http
-      .expectOne((r) => r.url.includes('skills/testing-essentials/SKILL.md'))
-      .flush('rate limited', {
-        status: 403,
-        statusText: 'Forbidden',
-        headers: { 'x-ratelimit-remaining': '0' },
-      });
+      .expectOne((r) => r.url.includes('/skills/testing-essentials'))
+      .flush('boom', { status: 500, statusText: 'Server Error' });
     await Promise.resolve();
     fixture.detectChanges();
 
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('rate limit');
-    expect(text).not.toContain("Couldn't load this");
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('error-state')).not.toBeNull();
+    expect(el.textContent).not.toContain('Decision table');
+  });
+
+  it('shows a stale-data notice when the last sync failed, even though the selected skill loaded fine', async () => {
+    const fixture = TestBed.createComponent(SkillsPage);
+    fixture.detectChanges();
+    drainRootResources({
+      status: 'failed',
+      startedAt: null,
+      finishedAt: null,
+      rulesSynced: 0,
+      error: 'connection refused',
+      stale: true,
+    });
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    fixture.componentInstance.select('signals-essentials');
+    fixture.detectChanges();
+    http
+      .expectOne((r) => r.url.includes('/skills/signals-essentials'))
+      .flush({ name: 'signals-essentials', body: '## Decision table' });
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('stale-notice')).not.toBeNull();
+    const text = el.textContent ?? '';
+    expect(text).toContain('out of date');
+    expect(text).toContain('connection refused');
+    // The document itself loaded fine — this is the degraded state, not the
+    // failed one, so the content still renders alongside the notice.
+    expect(el.querySelector('md-view')).not.toBeNull();
   });
 
   it('never renders raw HTML from a skill document', async () => {
     const fixture = TestBed.createComponent(SkillsPage);
     fixture.detectChanges();
+    drainRootResources();
+    await Promise.resolve();
+    fixture.detectChanges();
+
     fixture.componentInstance.select('angular-essentials');
     fixture.detectChanges();
     http
-      .expectOne((r) => r.url.includes('skills/angular-essentials/SKILL.md'))
-      .flush({ content: btoa('Text with <img src=x onerror=alert(1)> inside'), encoding: 'base64' });
+      .expectOne((r) => r.url.includes('/skills/angular-essentials'))
+      .flush({ name: 'angular-essentials', body: 'Text with <img src=x onerror=alert(1)> inside' });
     await Promise.resolve();
     fixture.detectChanges();
     const el = fixture.nativeElement as HTMLElement;

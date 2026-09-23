@@ -75,11 +75,14 @@ describe('RulesPage', () => {
     drainOtherEagerResources();
   });
 
-  it('renders one card per rule from the backend', async () => {
+  it('renders one card per rule from the backend, with no stale notice while fresh', async () => {
     const fixture = await renderWithRules(RULES);
     expect(
       (fixture.nativeElement as HTMLElement).querySelectorAll('rule-card'),
     ).toHaveLength(3);
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('stale-notice'),
+    ).toBeNull();
   });
 
   it('filters to blocking rules only', async () => {
@@ -147,9 +150,15 @@ describe('RulesPage', () => {
     // Rules loaded successfully, so `failure()` is still null and the page
     // renders the grid, not `error-state` — staleness is a banner concern
     // for pages that surface it, not a hard failure. This asserts the rules
-    // still render rather than the page getting stuck on the skeleton.
-    expect(
-      (fixture.nativeElement as HTMLElement).querySelectorAll('rule-card'),
-    ).toHaveLength(3);
+    // still render rather than the page getting stuck on the skeleton, and
+    // that the degraded-but-successful state is visible via `stale-notice`
+    // above the grid, distinct from the failure state.
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelectorAll('rule-card')).toHaveLength(3);
+    expect(el.querySelector('stale-notice')).not.toBeNull();
+    expect(el.querySelector('error-state')).toBeNull();
+    const text = el.textContent ?? '';
+    expect(text).toContain('out of date');
+    expect(text).toContain('connection refused');
   });
 });

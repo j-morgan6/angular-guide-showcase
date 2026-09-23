@@ -1,6 +1,15 @@
 import { Component, input } from '@angular/core';
 import { DatePipe } from '@angular/common';
-import type { Commit } from '../../core/github/github.types';
+import type { Commit } from '../../core/api/showcase.types';
+
+/**
+ * The backend sends the full-length sha — GitHub's short-sha convention is a
+ * display concern, not a storage one, so it's truncated here rather than at
+ * the source.
+ */
+export function shortSha(sha: string): string {
+  return sha.slice(0, 7);
+}
 
 @Component({
   selector: 'commit-list',
@@ -10,10 +19,10 @@ import type { Commit } from '../../core/github/github.types';
       @for (commit of commits(); track commit.sha) {
         <li>
           <a [href]="commit.url" target="_blank" rel="noopener noreferrer">
-            <code>{{ commit.sha }}</code>
+            <code>{{ shortSha(commit.sha) }}</code>
             <span class="message">{{ commit.message }}</span>
           </a>
-          <span class="meta">{{ commit.authorName }} · {{ commit.date | date: 'mediumDate' }}</span>
+          <span class="meta">{{ commit.authorName }} · {{ commit.authoredAt | date: 'mediumDate' }}</span>
         </li>
       } @empty {
         <li class="empty">No commits found.</li>
@@ -34,4 +43,5 @@ import type { Commit } from '../../core/github/github.types';
 })
 export class CommitList {
   readonly commits = input.required<Commit[]>();
+  protected readonly shortSha = shortSha;
 }
