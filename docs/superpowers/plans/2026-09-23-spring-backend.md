@@ -96,7 +96,7 @@ Moves the Angular app into `frontend/` so `backend/` can join it. Pure churn —
 - [ ] **Step 1: Record the baseline**
 
 ```bash
-cd /Users/joser/Development/angular-guide-showcase && npm test -- --run 2>&1 | tail -20
+cd /Users/joser/Development/angular-guide-showcase && npm test -- --watch=false 2>&1 | tail -20
 ```
 
 Write down the passing test count. That number must be identical at the end of this task.
@@ -128,7 +128,7 @@ Expected: `src/main.ts`, `tsconfig.app.json`, `src/styles.css`, `public` — unc
 - [ ] **Step 4: Reinstall and re-run the suite**
 
 ```bash
-cd frontend && npm ci && npm test -- --run 2>&1 | tail -20
+cd frontend && npm ci && npm test -- --watch=false 2>&1 | tail -20
 ```
 
 Expected: the identical passing count from Step 1. Any difference means a path broke — fix before continuing.
@@ -2854,7 +2854,21 @@ Expected: PASS, all four. If `isIdempotentAcrossRepeatedSyncs` fails on the id a
 
 - [ ] **Step 5: Resolve the SB101 self-invocation finding**
 
-Whatever the advisory reported, act on it: extract the per-repo work into its own bean so the transaction boundary is real, and re-run the suite. Record the before and after in `docs/spring-plugin-findings.md`, including your verdict on whether SB101 was right.
+Whatever the advisory reported, act on it — but **keep `syncRepo` on `SyncService`**. Extract only the transactional body into a new `RepoSyncer` bean:
+
+```java
+@Service
+public class RepoSyncer {
+    @Transactional
+    public int sync(String repoFullName) { /* the body that was in SyncService.syncRepo */ }
+}
+```
+
+`SyncService.syncRepo` then delegates: `return repoSyncer.sync(repoFullName);` and drops its own `@Transactional`. The call is now cross-bean, so the proxy applies and the transaction is real.
+
+Keeping the public entry point on `SyncService` matters: this task's tests call `sync.syncRepo(REPO)` and Task 10's `SyncController` injects `SyncService`. Moving the method wholesale would break both.
+
+Re-run the suite. Record the before and after in `docs/spring-plugin-findings.md`, including your verdict on whether SB101 was right.
 
 - [ ] **Step 6: Commit**
 
@@ -3695,8 +3709,12 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Create: `frontend/proxy.conf.json`
 - Modify: `frontend/angular.json` (dev-server proxy)
 - Modify: `frontend/src/app/features/rules/rules-page.ts`, `rules-page.spec.ts`, `rule-card.ts`, `rule-filters.ts`
-- Delete: `frontend/src/app/core/github/github-api.ts`, `github.types.ts`, `github-api.spec.ts`
-- Delete: `frontend/src/app/core/parsing/rules.ts`, `rules.spec.ts`, `base64.ts`, `base64.spec.ts`
+- Delete: `frontend/src/app/core/parsing/rules.ts`, `rules.spec.ts`
+
+**Not deleted in this task** (see Step 8): `core/github/` and `core/parsing/base64.ts` are
+still consumed by `skills-page`, `activity-page` and `github-api` itself. They go in Task 12,
+once nothing imports them. Deleting them here would break the build and make this task's own
+gate — a passing suite — unmeetable.
 
 **Interfaces:**
 - Consumes: `GET /api/plugins/{slug}/rules` from Task 9, `GET /api/sync/status` from Task 10
@@ -3777,12 +3795,16 @@ describe('ShowcaseApi', () => {
 
   afterEach(() => http.verify());
 
-  it('requests rules from the backend, not from GitHub', async () => {
+  it('requests rules from the backend, not from GitHub', () => {
     TestBed.tick();
     const req = http.expectOne('/api/plugins/spring-boot-guide/rules');
     expect(req.request.method).toBe('GET');
+    expect(req.request.url).not.toContain('api.github.com');
+
     req.flush([{ ruleId: 'SB005', kind: 'blocking', trigger: 'eager', fix: 'lazy', gate: 'none' }]);
-    await TestBed.inject(ShowcaseApi).rules.reload();
+    TestBed.tick();
+
+    expect(api.rules.value().map((r) => r.ruleId)).toEqual(['SB005']);
   });
 
   it('reports stale when the sync status says so', async () => {
@@ -3807,7 +3829,7 @@ Adjust the expected URL list to match whichever resources the service creates ea
 - [ ] **Step 3: Run it and verify it fails**
 
 ```bash
-cd frontend && npm test -- --run showcase-api 2>&1 | tail -20
+cd frontend && npm test -- --watch=false showcase-api 2>&1 | tail -20
 ```
 
 Expected: FAIL — `ShowcaseApi` does not exist.
@@ -3935,32 +3957,42 @@ Then change:
 
 Keep the filter logic, the `@empty` block, and the styles exactly as they are.
 
-- [ ] **Step 7: Update the error-state component**
+- [ ] **Step 7: Add the new error-state inputs additively**
 
 ```bash
 cat frontend/src/app/ui/state/error-state.ts
 ```
 
-Replace the `rateLimited`/`resetAt` inputs with `stale`/`syncError`. The three-state discipline is unchanged — loading, degraded, failed — but "degraded" now means *the backend's data is stale*, not *GitHub refused us*. Update `error-state.spec.ts` to match, keeping one test per state.
+**Add** `stale` and `syncError` as optional inputs alongside the existing `rateLimited` and `resetAt`:
 
-- [ ] **Step 8: Delete the superseded files**
+```typescript
+readonly stale = input(false);
+readonly syncError = input<string | undefined>(undefined);
+```
+
+Render the degraded banner when **either** `rateLimited()` or `stale()` is true, preferring the `syncError()` text when present.
+
+Do **not** remove `rateLimited`/`resetAt` here — `skills-page` and `activity-page` still bind them until Task 12, and removing them now breaks the build. Task 12 removes them once nothing binds them. Add one `error-state.spec.ts` test for the stale case; keep the existing tests.
+
+- [ ] **Step 8: Delete only the rules parser**
+
+`rules-page` was its only consumer, and Step 6 just removed that import:
 
 ```bash
-cd frontend && git rm src/app/core/github/github-api.ts src/app/core/github/github.types.ts \
-  src/app/core/github/github-api.spec.ts \
-  src/app/core/parsing/rules.ts src/app/core/parsing/rules.spec.ts \
-  src/app/core/parsing/base64.ts src/app/core/parsing/base64.spec.ts
+cd frontend && git rm src/app/core/parsing/rules.ts src/app/core/parsing/rules.spec.ts
 ```
+
+Leave `core/github/` and `core/parsing/base64.ts` alone — Task 12 removes them after rewiring the last two pages.
 
 Do **not** delete `core/parsing/markdown.ts`, its spec, the `__fixtures__` directory, or anything under `ui/markdown/`. Those carry the NG014 claim and stay.
 
 - [ ] **Step 9: Run the front-end suite**
 
 ```bash
-cd frontend && npm test -- --run 2>&1 | tail -30
+cd frontend && npm test -- --watch=false 2>&1 | tail -30
 ```
 
-Expected: PASS. The count will be **lower** than the Task 1 baseline — the rules-parser and base64 suites moved to Java. Confirm the drop matches those files and nothing else regressed.
+Expected: PASS. The count will be **lower** than the 82-test Task 1 baseline — the rules-parser suite moved to Java — and higher by the one new `error-state` stale test and the `showcase-api` tests. Confirm the delta is accounted for by exactly those files and nothing else regressed.
 
 - [ ] **Step 10: Commit**
 
@@ -4019,7 +4051,7 @@ The existing specs assert loading, rate-limited, failed and empty states through
 - [ ] **Step 5: Run the full front-end suite**
 
 ```bash
-cd frontend && npm test -- --run 2>&1 | tail -30
+cd frontend && npm test -- --watch=false 2>&1 | tail -30
 ```
 
 Expected: PASS.
@@ -4054,7 +4086,7 @@ Written, buildable, not deployed — per the spec's deployment decision. This ta
 
 **Files:**
 - Create: `backend/Dockerfile`, `backend/.dockerignore`
-- Modify: `compose.yaml` (add the app service)
+- Modify: `backend/compose.yaml` (add the app service — the file Task 3 created)
 - Modify: `README.md` (how to run both halves)
 - Modify: `.github/workflows/*.yml` (add a backend build job)
 
@@ -4216,7 +4248,7 @@ Include the BG005 false positive already observed while writing this plan: the B
 
 ```bash
 cd backend && ./mvnw -q verify 2>&1 | tail -20
-cd ../frontend && npm test -- --run 2>&1 | tail -20 && npm run build 2>&1 | tail -5
+cd ../frontend && npm test -- --watch=false 2>&1 | tail -20 && npm run build 2>&1 | tail -5
 ```
 
 Expected: all green. Report the actual numbers, not an assurance.
