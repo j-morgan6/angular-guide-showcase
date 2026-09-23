@@ -6,8 +6,10 @@ import com.jmorgan.showcase.catalog.SkillRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.web.client.HttpServerErrorException;
 
 import java.util.List;
 import java.util.Optional;
@@ -17,6 +19,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -207,5 +210,41 @@ class SyncServiceTest extends PostgresTestBase {
                 .extracting("name")
                 .containsExactly("transactions");
         assertThat(skills.findBySkillKey("spring-boot-guide:testing")).isEmpty();
+    }
+
+    /**
+     * The regression this guards: GithubClient#listSkillNames used to catch
+     * RestClientResponseException and return List.of(), identical to a
+     * genuinely empty skills/ directory. RepoSyncer#syncSkills built its
+     * "seen" set straight from that list with no way to tell the two apart,
+     * so a transient 503 on the one listing call emptied seenKeys, the
+     * unconditional deleteByPluginSlugAndSkillKeyNotIn wiped every stored
+     * skill for the plugin, and because syncRules still succeeded, nothing
+     * threw — the run recorded SUCCEEDED with the skills silently gone.
+     * listSkillNames now lets that exception propagate instead of
+     * swallowing it, so this must fail the run (same as an empty README)
+     * and leave the previously-synced skill in place.
+     */
+    @Test
+    void preservesExistingSkillsWhenTheSkillsListingFails() {
+        stubHappyPath();
+        sync.syncRepo(REPO);
+        assertThat(skills.findByPluginSlugOrderByName("spring-boot-guide")).hasSize(1);
+
+        stubOtherRepoSucceeds();
+        willThrow(new HttpServerErrorException(HttpStatus.SERVICE_UNAVAILABLE))
+                .given(github).listSkillNames(REPO);
+
+        sync.syncAll();
+
+        Optional<SyncRun> latest = runs.findFirstByOrderByStartedAtDesc();
+        assertThat(latest).isPresent();
+        assertThat(latest.get().getStatus())
+                .as("a failed skills listing must not be recorded as a clean success")
+                .isEqualTo(SyncStatus.FAILED);
+        assertThat(skills.findByPluginSlugOrderByName("spring-boot-guide"))
+                .as("existing skills must survive a transient listing failure, not be wiped")
+                .extracting("name")
+                .containsExactly("transactions");
     }
 }

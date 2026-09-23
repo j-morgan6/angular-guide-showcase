@@ -125,7 +125,12 @@ public class RepoSyncer {
         // Same deletion propagation as syncRules, keyed off the directory
         // listing rather than which SKILL.md fetches happened to succeed, so
         // a single transient file-fetch failure doesn't delete a skill that
-        // is still present upstream.
+        // is still present upstream. Safe to trust an empty `names` here as
+        // "genuinely zero skills" rather than "GitHub failed": unlike
+        // fetchFile, GithubClient#listSkillNames no longer swallows a failed
+        // request into List.of() — it throws, so a 503/rate-limit on this
+        // call never reaches this line at all; it fails the whole sync
+        // instead, the same way an empty README does.
         skills.deleteByPluginSlugAndSkillKeyNotIn(plugin.getSlug(), seenKeys);
     }
 

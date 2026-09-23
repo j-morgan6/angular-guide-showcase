@@ -101,27 +101,35 @@ public class GithubClient {
         return contributors == null ? List.of() : List.of(contributors);
     }
 
-    /** The directory names under skills/ — each holds one SKILL.md. */
+    /**
+     * The directory names under skills/ — each holds one SKILL.md.
+     *
+     * Unlike {@link #fetchFile}, this does not catch {@link RestClientResponseException}
+     * and swallow it into {@code List.of()}: {@link com.jmorgan.showcase.github.RepoSyncer}
+     * uses the result of this call to decide which skills to delete as
+     * "no longer upstream", so a transient 503 or rate limit on this one
+     * listing call must not be indistinguishable from "this repo genuinely
+     * has zero skill directories" — that ambiguity is exactly what let a
+     * passing-but-empty listing wipe every skill for a plugin on an
+     * otherwise-healthy sync. Letting the exception propagate means the
+     * caller's sync fails loudly (and RepoSyncer never reaches the delete
+     * call) instead of "succeeding" with data loss.
+     */
     public List<String> listSkillNames(String repoFullName) {
-        try {
-            GithubContent[] entries = restClient.get()
-                    .uri("/repos/" + sanitizePath(repoFullName) + "/contents/skills")
-                    .retrieve()
-                    .body(GithubContent[].class);
-            if (entries == null) {
-                return List.of();
-            }
-            List<String> names = new ArrayList<>();
-            for (GithubContent entry : entries) {
-                if ("dir".equals(entry.type())) {
-                    names.add(entry.name());
-                }
-            }
-            return names;
-        } catch (RestClientResponseException e) {
-            log.warn("Could not list skills for {}: {}", repoFullName, e.getStatusCode());
+        GithubContent[] entries = restClient.get()
+                .uri("/repos/" + sanitizePath(repoFullName) + "/contents/skills")
+                .retrieve()
+                .body(GithubContent[].class);
+        if (entries == null) {
             return List.of();
         }
+        List<String> names = new ArrayList<>();
+        for (GithubContent entry : entries) {
+            if ("dir".equals(entry.type())) {
+                names.add(entry.name());
+            }
+        }
+        return names;
     }
 
     /**
