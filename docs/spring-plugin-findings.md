@@ -377,6 +377,24 @@ elsewhere. A future plugin fix should detect "type declared with `@Entity`"
 `entity` or `domain.model`" (a naming check), or the rule will stay silent on
 every codebase that follows the plugin's own structural advice.
 
+### SB106 check — `CatalogRepositoryTest.countsRulesPerPluginAndZeroForUnknownSlug` (Task 9, review fix round 1)
+**Code:** the new test method added to
+`backend/src/test/java/com/jmorgan/showcase/catalog/CatalogRepositoryTest.java`
+covering `RuleRepository.countByPluginSlug`, following the file's existing
+constructor-injection style (fields `plugins`, `rules` unchanged from the
+file's Task 4 original).
+**Verdict:** no firing observed — did not fire this time.
+**Why:** unlike Task 8's `github` field (package `com.jmorgan.showcase.github`)
+and Task 9's `catalog` field on `CatalogController` (package
+`com.jmorgan.showcase.catalog`), the fields at risk here (`plugins`, `rules`)
+don't equal the package's last segment (`catalog`), so the
+package-statement-collision mechanism traced in both earlier SB106 entries
+had nothing to latch onto. Recorded per the task's instruction to note the
+outcome either way — a third occurrence was plausible given the file lives
+in the same `catalog` package, but the specific field-name collision that
+triggers the bug wasn't present here.
+**Action:** none.
+
 ### SB105 — did not fire on `CorsConfig` (Task 9, expected)
 **Code:** `registry.addMapping("/api/**").allowedOrigins("http://localhost:4200").allowedMethods("GET");`
 in `backend/src/main/java/com/jmorgan/showcase/config/CorsConfig.java`.

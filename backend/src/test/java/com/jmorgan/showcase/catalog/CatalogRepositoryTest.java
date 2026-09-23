@@ -53,4 +53,19 @@ class CatalogRepositoryTest extends PostgresTestBase {
         assertThat(byKey).isPresent();
         assertThat(byKey.get().getPlugin().getSlug()).isEqualTo("spring-boot-guide");
     }
+
+    @Test
+    void countsRulesPerPluginAndZeroForUnknownSlug() {
+        Plugin angular = plugins.save(new Plugin("angular-guide", "angular-guide", "j-morgan6/angular-guide"));
+        Plugin spring = plugins.save(new Plugin("spring-boot-guide", "spring-boot-guide", "j-morgan6/spring-boot-guide"));
+
+        rules.save(new Rule(angular, "NG001", RuleKind.BLOCKING, "trigger one", "fix one", "none"));
+        rules.save(new Rule(angular, "NG002", RuleKind.BLOCKING, "trigger two", "fix two", "none"));
+        rules.save(new Rule(angular, "NG003", RuleKind.BLOCKING, "trigger three", "fix three", "none"));
+        rules.save(new Rule(spring, "SB005", RuleKind.BLOCKING, "FetchType.EAGER", "Use LAZY", "none"));
+
+        assertThat(rules.countByPluginSlug("angular-guide")).isEqualTo(3L);
+        assertThat(rules.countByPluginSlug("spring-boot-guide")).isEqualTo(1L);
+        assertThat(rules.countByPluginSlug("no-such-plugin")).isEqualTo(0L);
+    }
 }
