@@ -12,6 +12,98 @@ skill's advice conflicted with what the code actually needed.
 
 ## Hook firings
 
+### STRUCTURAL — Bash writes bypass every Write|Edit-scoped hook (Tasks 2-5, discovered/fixed in Task 5 review round 1)
+**Mechanism, verified in both plugins' `hooks.json`:**
+```json
+// ~/.claude/plugins/cache/spring-boot-guide/spring-boot-guide/1.0.0/hooks/hooks.json
+"PreToolUse": [
+  { "matcher": "Bash",       "hooks": [ /* bash-guard.sh — BG001-BG006, inspects command text */ ] },
+  { "matcher": "Write|Edit", "hooks": [ /* hook-lint.sh pre  — SB001-SB020 blocking */ ] }
+],
+"PostToolUse": [
+  { "matcher": "Write|Edit", "hooks": [ /* hook-lint.sh post — SB101-SB113 advisory */ ] }
+]
+```
+```json
+// ~/.claude/plugins/cache/angular-guide/angular-guide/1.0.0/hooks/hooks.json
+"PreToolUse": [
+  { "matcher": "Bash",       "hooks": [ /* bash-guard.sh — BG001-BG006 */ ] },
+  { "matcher": "Write|Edit", "hooks": [ /* hook-lint.sh pre  — NG001-NG018 blocking */ ] }
+],
+"PostToolUse": [
+  { "matcher": "Write|Edit", "hooks": [ /* hook-lint.sh post — NG101-NG106 advisory */ ] }
+]
+```
+Both plugins scope every entity/code-content rule (SB001-SB020, SB101-SB113,
+NG001-NG018, NG101-NG106) to the `Write|Edit` tool matcher, and nothing else.
+`Bash` is matched only by `bash-guard.sh`, which inspects the shell command
+text (force-push, bare `mvn`, hanging run commands, etc.) — it has no access
+to, and never inspects, the content a command writes to disk. A file created
+or overwritten via `Bash` (heredoc, `sed`, `cp`, a script) is therefore never
+linted by either plugin, in either direction (blocking or advisory), no
+matter what it contains. This affects `angular-guide` identically to
+`spring-boot-guide` — it is not a `spring-boot-guide`-specific gap.
+
+**Why this is reachable through ordinary tool use, not an edge case:** this
+session's own auto-mode guidance actively instructs agents to prefer `Bash`
+heredocs/`sed` over the `Write`/`Edit` tools for file changes ("Do your work
+through the Bash tool wherever it can accomplish the job... rather than using
+the dedicated Read, Edit, or Write tools"). Following that generic guidance
+on a Spring Boot or Angular workspace makes the bypass the *default* code
+path, not an exotic evasion someone would have to go out of their way to
+trigger.
+
+**Evidence — blast radius, measured in Task 5's review fix round:** Tasks 2-4
+authored every backend file via `Bash` heredocs, and Task 5 initially did too
+before this was caught. That means the "no hooks fired" results recorded
+earlier in this file for Task 3's `application.yml` and Task 4's
+`Rule.plugin`/`Skill.plugin` meant *never evaluated*, not *evaluated and
+clean*. To measure the actual blast radius, every file below was re-written
+through the `Write` tool with byte-identical content (Read the file, write
+the exact same bytes back), so the hooks would evaluate each one for the
+first time:
+- all 23 `.java` files under `backend/src/main/java/` and
+  `backend/src/test/java/` (`ShowcaseApplication`, the full `catalog`
+  package — `Plugin`, `Rule`, `RuleKind`, `Skill`, and their repositories —
+  `PostgresTestBase`, `ShowcaseApplicationTests`, `CatalogRepositoryTest`,
+  plus the `activity`/`finding`/`github` packages and their tests added in
+  Task 5)
+- `backend/src/main/resources/application.yml`,
+  `application-local.yml`, `application-test.yml`
+- `backend/src/main/resources/db/migration/V1__baseline.sql`
+
+**Verbatim hook output during re-verification:** none. No `PreToolUse` block
+and no `PostToolUse` advisory output was produced by any of the 27 rewrites.
+`git status --porcelain` and `git diff --stat` were both empty immediately
+after, confirming every rewrite was byte-identical to what was already
+committed (no unintended edit slipped in while reproducing the content), and
+`./mvnw test` afterward was still 6/6 green (`ShowcaseApplicationTests`,
+`CatalogRepositoryTest` x2, `ActivityRepositoryTest` x2,
+`SyncRunRepositoryTest`). So: nothing was actually violating a blocking rule
+— Tasks 2-4's code happens to be clean, evaluated on its merits for the first
+time here — but that cleanliness was never previously verified by the
+plugin; it was assumed.
+
+**Verdict:** should have fired and did not — structural, not a per-rule
+defect. No individual SB or NG rule is wrong; the enforcement *surface* has a
+gap where an entire, ordinary tool-use path (`Bash` writing files) carries no
+coverage at all. Do not read this as "the rules are broken" — every rule that
+did evaluate (across Tasks 4 and 5, and now this 27-file re-verification)
+behaved exactly as designed once given a chance to run.
+**Action:** none for the code — nothing to fix, since re-verification found
+no actual violation. Recommended fix, forwarded to the plan rather than
+applied here: add a `PostToolUse` hook matched on `Bash` that lints whatever
+file(s) the command modified (e.g. diff the command's target paths against
+their pre-command state, or re-scan `git status` for changed files under
+`backend/src/`). A `PreToolUse` hook on `Bash` cannot do this — it fires
+before the command runs and cannot know what an arbitrary shell command will
+write, only what the command text says. Until such a hook exists, any future
+task must not rely on `Bash`-written files having been linted, and per this
+review's fix, `Write`/`Edit` should be treated as required — not merely
+preferred — for any file a spring-boot-guide or angular-guide rule can apply
+to, overriding the generic Bash-preference guidance for those specific
+writes.
+
 ### SB001 — backend/src/main/java/com/jmorgan/showcase/Probe.java (deliberate probe, Task 2)
 **Code:** `@Autowired private String value;`
 **Verdict:** true positive
