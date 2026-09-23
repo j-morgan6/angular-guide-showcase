@@ -58,22 +58,33 @@ authored every backend file via `Bash` heredocs, and Task 5 initially did too
 before this was caught. That means the "no hooks fired" results recorded
 earlier in this file for Task 3's `application.yml` and Task 4's
 `Rule.plugin`/`Skill.plugin` meant *never evaluated*, not *evaluated and
-clean*. To measure the actual blast radius, every file below was re-written
-through the `Write` tool with byte-identical content (Read the file, write
-the exact same bytes back), so the hooks would evaluate each one for the
-first time:
-- all 23 `.java` files under `backend/src/main/java/` and
-  `backend/src/test/java/` (`ShowcaseApplication`, the full `catalog`
-  package — `Plugin`, `Rule`, `RuleKind`, `Skill`, and their repositories —
-  `PostgresTestBase`, `ShowcaseApplicationTests`, `CatalogRepositoryTest`,
-  plus the `activity`/`finding`/`github` packages and their tests added in
-  Task 5)
-- `backend/src/main/resources/application.yml`,
+clean*.
+
+**The exact count (corrected in Task 14 — the earlier "27 rewrites" figure
+was wrong).** The re-verification sweep re-wrote **15 files** through the
+`Write` tool with byte-identical content (Read the file, write the exact same
+bytes back) — these are the files from Tasks 2-4 that had **never** been
+linted, and the sweep was the first time any hook evaluated them:
+
+- **11 `.java`** — `ShowcaseApplication`, the Task 4 `catalog` package
+  (`Plugin`, `Rule`, `RuleKind`, `Skill`, `PluginRepository`,
+  `RuleRepository`, `SkillRepository`), and the Task 2/3 tests
+  (`PostgresTestBase`, `ShowcaseApplicationTests`, `CatalogRepositoryTest`)
+- **3 `.yml`** — `backend/src/main/resources/application.yml`,
   `application-local.yml`, `application-test.yml`
-- `backend/src/main/resources/db/migration/V1__baseline.sql`
+- **1 `.sql`** — `backend/src/main/resources/db/migration/V1__baseline.sql`
+
+The earlier figure of 27 conflated these 15 with the **12** files Task 5 had
+already authored through `Write` in the same task (the `activity`, `finding`
+and `github` packages and their tests). Those 12 were linted when they were
+written, on their own merits; they were not part of the never-linted
+population and must not be counted as evidence for it. **15 is the number
+that carries the claim.** The conclusion is unchanged — it is the count that
+was wrong, not the finding — but this is the project's headline result, so
+the number has to be exact.
 
 **Verbatim hook output during re-verification:** none. No `PreToolUse` block
-and no `PostToolUse` advisory output was produced by any of the 27 rewrites.
+and no `PostToolUse` advisory output was produced by any of the 15 rewrites.
 `git status --porcelain` and `git diff --stat` were both empty immediately
 after, confirming every rewrite was byte-identical to what was already
 committed (no unintended edit slipped in while reproducing the content), and
@@ -88,7 +99,7 @@ plugin; it was assumed.
 defect. No individual SB or NG rule is wrong; the enforcement *surface* has a
 gap where an entire, ordinary tool-use path (`Bash` writing files) carries no
 coverage at all. Do not read this as "the rules are broken" — every rule that
-did evaluate (across Tasks 4 and 5, and now this 27-file re-verification)
+did evaluate (across Tasks 4 and 5, and now this 15-file re-verification)
 behaved exactly as designed once given a chance to run.
 **Action:** none for the code — nothing to fix, since re-verification found
 no actual violation. Recommended fix, forwarded to the plan rather than
@@ -893,3 +904,774 @@ unexamined by every config-content rule (SB007, SB012, SB013), wherever it
 sits, and the only thing enforcing the `${GITHUB_TOKEN:-}` passthrough on
 `backend/compose.yaml` in practice was following the task brief, not a
 hook.
+
+**Bucket correction (Task 14).** This entry is headed "should have fired and
+did not", and that overstates what was observed. No literal secret was ever
+written anywhere in this repository, so SB012 had nothing to catch and did
+not miss anything. The scope gap is real, traced, and worth fixing — but it
+is a **demonstrated latent gap reasoned from the rule's own source**, not an
+observed miss. Task 14's coverage audit therefore counts SB012 in "could not
+fire here (the violating pattern never occurred)" and carries the scope gap
+into the v1.1 fix list on its own merits. Keeping it in the "should have
+fired" bucket would inflate the single number this exercise exists to
+produce.
+
+### SB005 / SB009 — rule-shaped text inside Java string literals did NOT fire (Tasks 4, 6, 9 — verified in Task 14)
+
+**Code:** two linted files contain, as ordinary Java string literals, text
+that is a verbatim instance of another rule's trigger pattern:
+
+```java
+// backend/src/test/java/com/jmorgan/showcase/catalog/CatalogRepositoryTest.java:33,65
+rules.save(new Rule(spring, "SB005", RuleKind.BLOCKING, "FetchType.EAGER", "Use LAZY", "none"));
+```
+```java
+// backend/src/test/java/com/jmorgan/showcase/github/RuleTableParserTest.java:60
+String md = "| SB009 | `@RequestMapping(method = …)` | Use `@GetMapping`/`@PostMapping` | none |";
+```
+
+**Verdict:** no firing observed — did not fire, correctly. Recorded as a
+deliberate true-negative, because the sibling plugin fails the identical test
+three times over.
+
+**Why, traced to the implementation:** `hook-lint.sh:218-237` builds
+`CODE_PATH`, "the stripped copy every rule matches against", by running
+`lib/strip_java.py` over the content — which blanks comments **and string /
+char literal content**. Every `check_sbNNN` matches against `CODE_PATH` by
+default. A second view, `LITERAL_PATH` (`hook-lint.sh:244-260`), preserves
+literal content and is built only for the one rule that needs to see inside
+the quotes (SB105, `allowedOrigins("*")`). So the architecture is: literals
+are invisible to rules by default, and a rule opts in to seeing them.
+
+`FetchType.EAGER` as a bare string could have tripped a naive SB005; a
+`@RequestMapping(method = …)` string could have tripped a naive SB009.
+Neither did, because by the time either rule ran, the quoted content was
+blanked.
+
+**Why this matters beyond this repository:** the sibling `angular-guide`
+plugin, running in the same workspace on the same class of content, produced
+**three NG001 false positives** on exactly this shape — rule-trigger text
+sitting inside a test fixture's template literal (see
+`docs/plugin-findings.md`). That log's own recommended fix reads: "strip
+string and template literals before matching, the way comments are already
+stripped… would fix this class at the root rather than per-rule."
+`spring-boot-guide` already implements precisely that, and this entry is the
+empirical proof it works: same hazard, same workspace, same week — zero false
+positives on the plugin that strips literals, three on the plugin that does
+not. That is a cross-plugin result neither log could produce alone.
+
+**Action:** none — nothing to fix in `spring-boot-guide`. Carried into
+`docs/plugin-findings.md` as the concrete precedent for the `angular-guide`
+v1.1 recommendation.
+
+### SB110 — should have fired and did not: an `@Entity` crosses into `SyncController` (Task 14, found by `spring-architecture-review`)
+
+**Code:** `backend/src/main/java/com/jmorgan/showcase/github/SyncController.java`
+— a `@RestController` — takes the `SyncRun` **entity** as a method parameter
+type and reads its state directly:
+
+```java
+@RestController
+@RequestMapping("/api/sync")
+public class SyncController {
+    @GetMapping("/status")
+    public SyncStatusDto status() {
+        return sync.latestRun()          // SyncService.latestRun() -> Optional<SyncRun>
+                .map(this::toDto)
+                .orElseGet(() -> new SyncStatusDto("never", null, null, 0, null, true));
+    }
+
+    private SyncStatusDto toDto(SyncRun run) {   // <-- @Entity as a parameter type
+        boolean stale = run.getStatus() != SyncStatus.SUCCEEDED || isOverdue(run.getFinishedAt());
+        ...
+```
+
+`SyncRun` is annotated `@Entity` (`SyncRun.java:14`). The service hands the
+entity out of the transaction (`SyncService.latestRun()` returns
+`Optional<SyncRun>`, and `SyncService` carries no `@Transactional` at all),
+and the entity-to-DTO mapping — plus the staleness *policy* — lives inside
+the controller.
+
+**Verdict:** **should have fired and did not.** This is the single clearest
+instance in the project of the exact defect SB110 exists to prevent, sitting
+in a file the hook linted, and the rule was silent.
+
+**Why, traced against the rule's own implementation** (`check_sb110`,
+`hook-lint.sh`): the check's first act after confirming `@RestController` is
+to collect candidate type names from import statements only:
+
+```python
+for m in re.finditer(
+        r"^[ \t]*import[ \t]+[A-Za-z0-9_.]*\.(?:entity|domain\.model)\.([A-Za-z0-9_]+)[ \t]*;",
+        src, re.M):
+    names.add(m.group(1))
+if not names:
+    sys.exit(1)
+```
+
+Two independent reasons it could not fire here, and the second is the sharper
+one:
+
+1. **The package-name heuristic.** `SyncRun` lives in
+   `com.jmorgan.showcase.github`, which contains neither `.entity.` nor
+   `.domain.model.` as a segment. This is the gap already recorded in the
+   Task 9 SB110 entry above: the plugin's own `project-structure` skill (and
+   its own `spring-project-structure` agent, twice) mandates feature-first
+   packaging, and following that advice puts every entity outside SB110's
+   reach.
+2. **Same-package entities produce no import line at all.** `SyncController`
+   and `SyncRun` are both in `com.jmorgan.showcase.github`, so the controller
+   never writes an `import` for the entity — there is nothing for the regex
+   to match, and `names` is empty before the usage check is ever reached.
+   **This defeats SB110 even in a codebase that does use `.entity.`
+   packages**, whenever the controller sits in the same package as the entity
+   it leaks. The rule's own documented limitation ("a project that does not
+   use `.entity.` packages gets no coverage") describes only defect 1; defect
+   2 is undocumented and independent of naming entirely.
+
+Note the usage condition itself was satisfied — the rule's fix-round
+narrowing (the imported simple name must appear as a return or parameter
+type, not merely be imported) would have passed, since `SyncRun` is a
+parameter type of `toDto`. The rule failed at the import gate, before it ever
+got to the check it was refined for.
+
+**How it was found:** not by any hook, and not by me — by
+`spring-boot-guide:spring-architecture-review` dispatched in Task 14 (finding
+3 of its report, transcribed below), which reasoned across
+`SyncController` → `SyncService` → `SyncRun` and named the SB110 blind spot
+itself: "The package is `github`, not `entity`, which is exactly the case the
+per-file SB110 heuristic cannot see." Second measured instance in this
+project of a review agent catching what a per-file regex structurally cannot,
+after Task 10's SB111-vs-`jpa-review` result.
+
+**Action:** none applied — Task 14 is a documentation task and the fix
+(moving `toDto`/`isOverdue` into `SyncService` and returning `SyncStatusDto`
+from it) is a production change outside its file list, recorded below in the
+Task 14 agent triage as deferred. The plugin-side fix is in the v1.1 list:
+detect "a type declared with `@Entity`" semantically rather than "a type
+imported from a package literally named `entity`", which fixes both defects
+at once.
+
+---
+
+## Agent reviews (Task 14, Step 1) — all three agents against the finished backend
+
+All three `spring-boot-guide` review agents were dispatched against the
+completed `backend/src/main/java/` (45 production classes across `catalog`,
+`activity`, `finding`, `github`, `config`, plus their `dto/` sub-packages).
+This satisfies the spec's success criterion 5: every review agent has now run
+against real code. Each finding is triaged below with my own verdict,
+including the ones I judge wrong.
+
+### `spring-architecture-review` — 7 findings
+
+| # | Finding | My verdict |
+|---|---|---|
+| 1 | `RepoSyncer.sync()` holds a transaction open across every GitHub HTTP call (`RepoSyncer.java:52-70`) | **True positive, already on file** |
+| 2 | `github` writes through `catalog`/`activity` repositories and duplicates their business-key derivation | **True positive, new** |
+| 3 | `@Entity` (`SyncRun`) crosses into `SyncController`, with staleness policy and config in the web layer | **True positive, new — and the SB110 finding above** |
+| 4 | `SyncService` has no transaction boundary; `syncAll` bookkeeping has no `finally` | **True positive, new** |
+| 5 | `CatalogService.plugins()` 1+N count queries | **True positive, known and accepted** |
+| 6 | Rule filtering done in the JVM rather than the database | **Noise for this codebase** |
+| 7 | `SyncService.syncRepo` is a pass-through kept alive by a stale comment | **True positive, partially known** |
+
+**Finding 1 — agree, unchanged.** Independently re-derived, third agent run to
+raise it (Task 9's architecture review, Task 10's `jpa-review` note, and now
+both Task 14 agents). It remains deferred for the reason ruled in Task 9:
+splitting fetch from persist is its own task, not a drive-by edit. The new
+detail this run adds is worth keeping — `RestClient` has no configured
+connect/read timeout, so the pinned connection is unbounded, not merely long.
+
+**Finding 2 — agree, and this is the most valuable new architectural finding
+of the run.** `RepoSyncer` injects five repositories belonging to two other
+feature packages, and recomputes their business keys inline
+(`plugin.getSlug() + ":" + p.ruleId()` at `RepoSyncer.java:75` duplicating
+`Rule.java:56`, and the same shape for `Skill` and `Contributor`). The agent's
+account of the failure mode is correct and specific: change the key format in
+the entity and the `findByRuleKey` lookups silently stop matching,
+`orElseGet` constructs a new row every time, and the sync dies on the
+`UNIQUE` constraint at `V1__baseline.sql:14` — in the scheduler, not in a
+test. I verified all three duplication sites. No hook in the set can see this
+(it spans four files); nor could one reasonably be written to.
+
+**Finding 3 — agree; promoted to its own SB110 entry above.** The agent
+identified both the defect and the reason the plugin's own rule missed it.
+
+**Finding 4 — agree, new, and genuinely worth acting on.** `SyncService` is
+the only `@Service` with no `@Transactional` at all, and `latestRun()` reads
+outside a transaction with `open-in-view: false`. Today that is safe only
+because `SyncRun` happens to have no associations — add one lazy field and it
+becomes a `LazyInitializationException` during JSON serialization, at
+runtime, in production. The `finally`-less bookkeeping in `syncAll()` is a
+second real defect: an `Error` or checked exception escaping the loop leaves
+the `sync_run` row `RUNNING` forever, which the status endpoint then reports
+as permanently stale. Both are outside Task 14's mandate; recorded for a
+follow-up task.
+
+**Finding 5 — agree the shape is real, but it is already a recorded,
+deliberate decision, not a new defect.** Task 9 fixed the expensive half of
+this (loading full `Rule` rows with three `TEXT` columns just to `.size()`
+them) by introducing `countByPluginSlug`, and explicitly recorded that the
+1+N *shape* remained, the grouped-query alternative being a larger change
+than warranted. The agent had no way to know that from the source alone, and
+it is right that the shape persists. Not a miss on anyone's part; N is 2.
+
+**Finding 6 — noise.** In-JVM filtering of ~40 rules per plugin is
+correctness-neutral and the agent says so itself ("correctness-neutral at ~40
+rules per plugin"). Pushing the free-text predicate into a `@Query` would
+trade a readable service method for a `like`-concatenation query against
+three `TEXT` columns that has no index behind it either. Technically right,
+not worth acting on, and not worth the reader's attention at this size — the
+definition of noise. Recorded rather than silently dropped.
+
+**Finding 7 — agree on the substance, and it is sharper than the Task 9
+version.** Task 9's architecture review flagged the same javadoc as *stale*.
+This run goes further and is correct: `SyncController` genuinely never calls
+`syncRepo` (verified — it calls only `latestRun()`), so the comment is not
+merely out of date, it is false about the present tree, and the only
+remaining non-`syncAll` callers are six test assertions. Whether to inline
+the method is a judgement call I would leave alone (the indirection is
+harmless and the tests are legitimate callers); the comment should be
+corrected. Still deferred — `SyncService.java` is outside this task's file
+list, and this is now the second task to defer it, which is itself worth
+noting.
+
+### `spring-project-structure` — 5 findings, and the baseline held
+
+The agent was given the Task 4 baseline (feature-first, entities and
+repositories together, one `config` package) and asked to say whether the
+finished tree drifted. **Verdict: it held.** Every package added after Task 4
+(`activity`, `finding`, `github`) adopted the same feature-first shape; no
+`controller`/`service`/`repository` layer package was ever created; exactly
+one `@Configuration` class exists and it is in `config/`. Both of the Task 4
+run's proactive watch items came out clean. That is a real result for the
+plugin's own structural advice: two agent runs eight tasks apart, consistent
+verdicts, no drift.
+
+| # | Finding | My verdict |
+|---|---|---|
+| 1 | `RepoSyncer` is a `@Service` without the `Service` suffix, beside `SyncService` | **True positive, cosmetic** |
+| 2 | GitHub wire records at package root while `github/dto/` exists | **True positive, cosmetic** |
+| 3 | `github` is the only package hosting two concerns (integration client + a vertical feature) | **True positive, accepted** |
+| 4 | `RepoSyncer` writes through other features' repositories | **True positive — same as architecture finding 2** |
+| 5 | `finding` has no test package at all | **True positive, and the most actionable of the five** |
+
+**Findings 1-3 — agree, all cosmetic, none worth a change now.** The naming
+and placement inconsistencies are real and correctly identified; the agent is
+also right that each is defensible and that the actual defect is the *absence
+of a stated reason*, not the choice. Its suggested remedy for all three — a
+one-line javadoc or `package-info.java` saying why — is the proportionate
+one. Finding 3's full package split is correctly self-flagged as "a real
+refactor for a small payoff."
+
+**Finding 4 — agree; the same defect the architecture review raised
+independently as its finding 2.** Two agents with different mandates
+converging on the same boundary violation from different directions
+(structure vs. layering) is corroboration, not duplication. It raises my
+confidence that this, not the transaction-across-HTTP issue, is the codebase's
+most consequential design flaw.
+
+**Finding 5 — agree, and this is the one I would act on first.** There is no
+`backend/src/test/java/com/jmorgan/showcase/finding/` directory at all, while
+`catalog`, `activity` and `github` each have controller and/or repository
+tests. This was already half-known: Task 10 deferred a minor noting
+"no `FindingService`/`FindingController` test". The agent's contribution is
+naming exactly what is uncovered — `FindingService.findings(ruleKey)`'s
+null/blank branch and the `@RequestParam(required = false)` binding — and
+that the `@EntityGraph` fix from Task 10 therefore has **no regression test
+guarding it**. That is a genuine hole in this project's own verification, not
+just a structural observation.
+
+### `jpa-review` — 10 findings
+
+Dispatched with two explicit verification asks: confirm the Task 10
+`@EntityGraph` fix is real and complete, and re-check the two known-unfixed
+`RepoSyncer` issues.
+
+**Both verification asks answered, and the answers are load-bearing.** The
+agent confirmed `@EntityGraph(attributePaths = {"rule", "rule.plugin"})` is
+present on **both** `FindingRepository` methods, that Spring Data expands the
+dotted `rule.plugin` into a real subgraph so both lazy hops are satisfied by
+the initial select, and — the part I could not have asserted myself without
+checking — that `FindingService` lines 23-24 are the **only** call sites and
+no inherited `findAll()`/`findById()` is used on findings anywhere, so the
+fix has no bypass. **The double N+1 from Task 10 is genuinely gone, verified
+independently.** That closes the loop on the project's central experiment.
+
+| # | Finding | My verdict |
+|---|---|---|
+| 1 | Transaction across GitHub HTTP (`RepoSyncer.java:52-70`) | **True positive — third independent confirmation** |
+| 2 | Unbounded `GET /api/findings`, `recorded_at` unindexed | **True positive, new** |
+| 3 | Write-path N+1: per-row lookups in all four sync loops, no JDBC batching | **True positive, new and specific** |
+| 4 | `CatalogService.plugins()` 1+N counts | **True positive, known** (see architecture finding 5) |
+| 5 | Rule filtering in the JVM | **Noise** (same call as architecture finding 6) |
+| 6 | Unbounded activity reads, sort columns unindexed | **True positive, new** |
+| 7 | `equals` reads `that.field` directly instead of `that.getField()` — broken against a lazy proxy | **True positive, new, and the best finding of the run** |
+| 8 | `Finding` and `SyncRun` have no `equals`/`hashCode` | **True positive, partially known** |
+| 9 | `SyncService.latestRun()` read path lacks `@Transactional(readOnly = true)` | **True positive — same as architecture finding 4** |
+| 10 | Entity `@Column` lengths diverge from the migration's `VARCHAR(n)` | **True positive, low severity** |
+
+**Finding 7 is the standout, and it overturns something this log previously
+recorded as clean.** Task 4's `jpa-review` run reported the entities'
+`equals`/`hashCode` as "well-formed: `equals`/`hashCode` over
+`slug`/`ruleKey`/`skillKey` (business keys, not generated `id`, not all
+fields)" and I recorded a true-negative verdict agreeing with it. That
+assessment was right about the *key choice* and missed the *access form*. All
+five entities do:
+
+```java
+return Objects.equals(slug, that.slug);   // Plugin.java:99 — direct field read
+```
+
+`that.slug` is a direct field access. When `that` is an uninitialized
+Hibernate proxy its own fields are `null` regardless of the underlying row,
+so the comparison returns false for two objects representing the same row.
+`this.slug` is safe — the proxy intercepts the `equals` call and delegates to
+the initialized target — so only the argument side is broken, which is
+exactly why it reads as correct. And it is live here rather than theoretical:
+**every** `@ManyToOne` in this codebase is `LAZY`, so `rule.getPlugin()`,
+`commit.getPlugin()` and `finding.getRule()` all hand out proxies. The fix is
+one character class per entity: `that.getSlug()`.
+
+Two things follow. First, **no rule in the 39 comes close to this** — SB005
+and SB112 police fetch types, SB006 polices Lombok-generated equality, and
+nothing inspects the *body* of a hand-written `equals`. Second, **an agent
+run against the same files eight tasks earlier missed it and I ratified that
+miss.** Agents are not deterministic checkers and a clean agent report is not
+a proof; this is the clearest evidence in the project for that, and it is a
+caution against the conclusion that agents simply dominate hooks.
+
+**Findings 2, 3 and 6 — agree, all new, all correctly scoped.** Finding 3 is
+the most useful of the three because it is specific rather than generic: four
+named loops, each issuing one select and one insert per element, inside the
+long transaction from finding 1, with no
+`hibernate.jdbc.batch_size` set in `application.yml` (verified — it is not
+there). The hoist-the-lookup-into-a-`Map` fix is concrete and correct. Note
+that this is the write-path N+1 the Task 10 `jpa-review` run explicitly
+declined to rank because its mandate was the read path — so the earlier run
+saw it, scoped it out honestly, and this run picked it up when asked for
+both. Good agent behaviour in both directions.
+
+**Finding 8 — agree, and it sharpens a note Task 10 recorded as "not
+urgent".** The new part is that `Finding` has **no business key available**
+to write `equals` over: the `finding` table (`V1__baseline.sql:55-64`) has no
+unique constraint on any column or combination, so fixing the equality
+requires first deciding what identifies a finding and adding a unique index.
+That is a schema decision, not a code tidy-up, which is a materially
+different conclusion from "add an `equals`".
+
+**Finding 10 — agree, low severity, correctly explained.** `ddl-auto:
+validate` compares type names and not lengths, so eleven `@Column`s whose
+implicit 255 disagrees with the migration's declared width pass validation
+today. Real, cheap to fix, no live consequence. Worth recording mainly
+because it is a case of a correct configuration (`validate`) creating a false
+sense of coverage — which is the same shape as this whole project's central
+theme.
+
+**Overlap between the three agents:** the transaction-across-HTTP defect was
+raised by two of three; the `RepoSyncer`-reaches-into-other-features defect by
+two of three; the missing `SyncService` transaction boundary by two of three.
+Overlap of roughly a third, from agents with deliberately different mandates,
+with each still producing findings the others did not (structure found the
+missing `finding` test package; JPA found the proxy-unsafe `equals`;
+architecture found the entity in the controller). Dispatching all three is
+not redundant.
+
+---
+
+# Synthesis
+
+Written in Task 14, the final task. This is the deliverable the other
+thirteen tasks existed to produce: the first validation of
+`spring-boot-guide` v1.0.0 against real code. Until this project, every
+assertion in the plugin ran against synthetic fixtures — the README says so
+itself (Known limitation 8: "The plugin has never been run against a real
+Spring Boot codebase… False positives on real code remain the failure mode
+most likely to be hiding").
+
+## Read this first: what this exercise can and cannot tell you
+
+**The code was written by implementers following a plan I authored with the
+rule set open in front of me.** Briefs handed implementers verbatim Java. So
+the code largely pre-complies with the rules by construction, and a rule
+staying silent on it is weak evidence that the rule would stay silent on code
+written without the rules in view. That structurally limits false-positive
+discovery — which is the failure mode the plugin's own README names as the
+one most likely to be hiding, and which the spec named as this exercise's
+main prize.
+
+This was identified during Task 4 and the decision recorded was to continue
+rather than change method mid-flight, so results stay comparable task to
+task. A reader needs this to weigh everything below. In particular: **"31 of
+39 rules could not fire because the violating pattern never occurred" is
+partly a fact about the plan, not only about the codebase.**
+
+Three counterweights did generate code the rules had not been consulted about,
+and every genuine result below comes from one of them:
+
+1. **Two deliberately planted defects.** The SB101 `@Transactional`
+   self-invocation (Task 8) and the `FindingService.toDto` N+1 (Task 10).
+   Both produced clean results — one caught by a hook, one missed by the hook
+   and caught by an agent.
+2. **Implementer deviations where reality differed from the plan.** Eight
+   Boot 4.1 API relocations the plan got wrong (`@DataJpaTest`, `@WebMvcTest`,
+   the `spring-boot-restclient` module, the starter split, `@Primary` in a
+   slice test, and others). Each forced unplanned code.
+3. **Emergent structure nobody designed.** The three false positives all
+   landed on field names the plan never chose deliberately, and the SB110
+   miss below is on a controller shape that accumulated across two tasks.
+
+The one class of result this method is *good* at, and which is not
+compromised: **rules that should have fired and did not.** A miss does not
+care whether the code was pre-complied — the defect was there, the rule ran,
+and it said nothing. That is also precisely what the plugin's mutation gate
+structurally cannot produce, because a mutation test asks "does disabling
+this detector break its own fixture?" and a fixture is by definition a case
+the author already thought of.
+
+## Tally
+
+Counting **firings** (hook output events), across Tasks 2-13:
+
+| Verdict | Count |
+|---|---|
+| True positive | 4 |
+| False positive | 3 |
+| Noise | 0 |
+| Should have fired, did not | 2 rules (SB110, SB111) + 1 structural surface gap |
+
+**True positives (4):** SB001 (Task 2, deliberate probe — field `@Autowired`
+blocked), BG002 (Task 2, deliberate probe — bare `mvn -version` blocked),
+SB101 (Task 8, the planted self-invocation — and all four tests passed *with
+the defect live*, so the bug was silent and only the advisory caught it),
+SB113 (Task 8, the 8-parameter `SyncService` constructor).
+
+**False positives (3):** SB106, three times — Task 8 (`github` field in
+package `…github`), Task 9 (`catalog` in `…catalog`), Task 10 (`activity` in
+`…activity`). One root cause, traced to source, with **two negative controls**
+confirming the mechanism (fields `plugins`/`rules` in `…catalog` and
+`findings` in `…finding` did **not** fire, because the field name does not
+exactly equal the package's last segment). The third occurrence was
+**predicted in advance** in the Task 10 dispatch and landed as predicted.
+
+**Noise (0), stated as a result rather than left blank.** Nothing fired that
+was technically correct but not worth the interruption. Every firing was
+either a genuine catch or a genuine defect in the rule. That is a good
+property and worth naming: this rule set does not chatter. (Two *agent*
+findings were noise — architecture #6 and jpa #5, the same in-JVM filtering
+observation — but no hook produced any.)
+
+**Should have fired and did not (2 rules + 1 structural):**
+
+- **SB111** — the planted double N+1 in `FindingService.toDto`, live in a
+  linted file. Missed for two independent reasons (no `for` loop in the file;
+  the walk is a to-one proxy chain, not a collection walk). Pre-admitted by
+  the README as best-effort, but a miss is a miss.
+- **SB110** — `SyncRun`, an `@Entity`, crosses into `SyncController` as a
+  method parameter type. Missed for two independent reasons, of which only
+  the first is documented (feature-first packaging defeats the `.entity.`
+  heuristic; **same-package entities produce no import line at all**, which
+  defeats the rule regardless of naming convention).
+- **Structural: the `Bash` write bypass.** Not a per-rule miss — every one of
+  the 33 `Write|Edit`-scoped rules was silently inert for three whole tasks.
+  15 files from Tasks 2-4 were never linted; re-verification found nothing
+  actually violating, so no rule is retroactively reclassified, but the
+  *surface* had a hole an ordinary tool-use path walks straight through.
+
+The ratio to notice is not 4:3. It is that **both** of the deliberately
+planted defects tested a different thing and gave different answers (SB101
+caught, SB111 missed), and that all three false positives are one bug.
+
+## Prioritised fix list for `spring-boot-guide` v1.1
+
+| Priority | Rule | Change | Evidence |
+|---|---|---|---|
+| **P0** | Hook surface (`hooks.json`, both plugins) | Add a `PostToolUse` hook matched on `Bash` that lints whatever files the command wrote. A `PreToolUse` hook cannot do this — it runs before the command and cannot know what an arbitrary shell command will write. Until it exists, document that `Write`/`Edit` is **required**, not preferred, for any file a rule can apply to. | "STRUCTURAL — Bash writes bypass every Write\|Edit-scoped hook". 33 of 39 rules inert for Tasks 2-4; 15 files never linted. Reachable by default: this harness's own auto-mode guidance instructs agents to prefer Bash heredocs over `Write`. |
+| **P0** | SB106 | Exclude lines beginning `package` / `import` from the declaration scan at `hook-lint.sh:867`, or require a type token before the field name. The regex `^[^\n;]*\b(NAME)\s*(?:;\|=)` matches `package com.x.github;` when the field is named `github`; `break` then stops before the real declaration. | 3 firings, all false, Tasks 8/9/10, traced to source by running the embedded Python directly; 2 negative controls. **Sharpest point: this collides hardest under feature-first packaging, which the plugin's own `project-structure` skill mandates.** A field named `config` in `…config`, or `github` in `…github`, is the naming that skill pushes you toward. |
+| **P0** | SB110 | Detect "a type declared with `@Entity`" semantically instead of "a type imported from a package named `entity`/`domain.model`". This fixes both defects at once — the package heuristic *and* the same-package case where no import line exists for the regex to find. | Task 14 SB110 entry: `SyncRun` (`@Entity`) is a parameter type of `SyncController.toDto`. Found by `spring-architecture-review`; no hook saw it. Defect 2 (same-package) is **undocumented** — README limitation 4 describes only the naming heuristic. |
+| **P1** | SB007 / SB012 / SB013 | Widen the **script-level basename gate** at `hook-lint.sh:126-134`, which `exit 0`s the entire hook process for any `.properties`/`.yml`/`.yaml` file whose basename does not start with `application`. Dropping the basename requirement in favour of the existing path-based `is_main_config()` is the cleaner fix. Adding directories to `is_main_config` does **not** help — that gate is never reached. | Task 13 entry (corrected). The blind spot is naming-based, not location-based: `src/main/resources/db-secrets.yml` containing `password: hunter2` gets **zero** coverage from all three config rules, despite sitting in Spring's own config root. |
+| **P1** | SB111 | Either widen to stream pipelines and to-one proxy chains, or — better, given the false-positive cost the rule's own comment cites — leave the detector alone and change the *message* to say what it cannot see and to name `jpa-review` as the required backstop. The rule currently reads as N+1 coverage while providing a narrow slice of it. | Task 10: planted double N+1 missed; `jpa-review` caught it on the identical unmodified code and characterised it *more* precisely (double N+1, unbounded endpoint) than SB111's message would have. Reviewer independently read `check_sb111` (`hook-lint.sh:1020-1042`) and confirmed the miss is structural, not incidental. |
+| **P1** | Docs / packaging | Ship the three review agents as a required part of the workflow rather than an adjunct, and say in the README that hooks alone leave the cross-file N+1 and entity-boundary cases uncovered. | Both should-have-fired misses were caught by agents (SB111→`jpa-review`, SB110→`spring-architecture-review`). Two independent measured instances, on real code, with the defect live. |
+| **P2** | README limitation 8 | Retire it — the plugin has now been run against a real Spring Boot codebase. Replace it with what this run actually found, including the methodology caveat above, so the next reader does not overread a low false-positive count. | This document. |
+| **P2** | README limitation 4 | Extend it: SB110 is defeated not only by a project that avoids `.entity.` packages, but by any controller sitting in the *same package* as the entity it leaks, whatever the naming convention. | Task 14 SB110 entry, defect 2. |
+| **P3** | SB113 | No change to the threshold. Worth a note in the skill: resolving SB101 by splitting a bean tends to leave the new bean near the parameter limit (`RepoSyncer` landed at 6 of 7), so the two rules interact. | Task 8: the SB101 split fixed SB113 as a side effect; Task 8's deferred minor records `RepoSyncer` one dependency short of retripping it. |
+| **—** | SB005 / SB009 / literal stripping | **No change — keep exactly as built, and hold it up as the reference implementation.** `CODE_PATH` blanks string-literal content by default and a rule opts into `LITERAL_PATH` when it genuinely needs to see inside the quotes (only SB105 does). | Task 14 entry: `"FetchType.EAGER"` and `"@RequestMapping(method = …)"` sit as literal strings in two linted test files and neither rule fired. The sibling `angular-guide` plugin, same workspace, produced **three** NG001 false positives on exactly this shape because it does not strip literals. Same hazard, two architectures, measurably different outcomes. |
+| **—** | SB019 / SB020 / SB103 / SB102 | **No change.** All four ran with their gates satisfied, against code that genuinely contained their trigger surface, and all four correctly stayed silent. | SB019 silent on 4 × `@MockitoBean` (verified present unrelocated in `spring-test-7.0.8.jar`); SB020 silent on 7 × `com.fasterxml.jackson.annotation.*` imports with `jackson_major: 3` (the exemption held); SB103 silent across 5 `RestClient` call sites with `boot_major: 4`; SB102 silent on `open-in-view: false` with `data-jpa` in starters. These four are the Boot 4 decision's whole point, and they behaved. |
+
+## Coverage audit — all 39 rules, one bucket each
+
+Buckets: **fired**, **could not fire here** (the violating pattern never
+occurred, or gating disabled it — stated per rule), **should have fired and
+did not**.
+
+### Fired — 5 rules
+
+| Rule | Where | Verdict |
+|---|---|---|
+| BG002 | Task 2, `mvn -version` with `wrapper: true` | True positive (deliberate probe) |
+| SB001 | Task 2, `@Autowired private String value;` in `Probe.java` | True positive (deliberate probe) |
+| SB101 | Task 8, `SyncService.syncAll()` → `this.syncRepo(...)` | True positive (planted defect) |
+| SB106 | Tasks 8, 9, 10 — three firings | **False positive ×3** |
+| SB113 | Task 8, 8-parameter `SyncService` constructor | True positive |
+
+### Should have fired and did not — 2 rules
+
+| Rule | The defect that was present | Why it was silent |
+|---|---|---|
+| SB110 | `SyncRun` (`@Entity`) as a parameter type of `SyncController.toDto`, with the entity handed out of the service layer | (a) package `…github` matches neither `.entity.` nor `.domain.model.`; (b) **same package as the controller, so no `import` line exists** and the rule's candidate-name set is empty before any usage check runs |
+| SB111 | The planted double N+1 in `FindingService.toDto` (`Finding→Rule→Plugin`, up to 2N+1 queries on an unbounded endpoint) | (a) no `for` statement in the file — a `.stream().map(methodRef)` pipeline; (b) the terminal call is a scalar getter on a to-one proxy, not a collection walk. Doubly outside the regex, and arguably outside the rule's intended target |
+
+Plus one **structural** gap that is not a per-rule miss: the `Bash` write
+bypass left all 33 `Write|Edit`-scoped rules inert across Tasks 2-4 (15 files
+never linted).
+
+### Could not fire here — 32 rules
+
+**Disabled by gating (1):**
+
+| Rule | Gate | Why |
+|---|---|---|
+| SB006 | `lombok: false` in the workspace profile | The rule is gated off entirely, regardless of what the entity code contains. Task 4 wrote hand-rolled `equals`/`hashCode` and plain accessors; adding Lombok purely to provoke the rule would mean shipping code nobody would write. **This belongs here and not in "should have fired" — miscategorising a disabled gate as a plugin gap would fabricate a defect the plugin does not have.** |
+
+**The violating pattern never occurred (31):**
+
+| Rule | What was present instead | Ran with trigger surface genuinely nearby? |
+|---|---|---|
+| BG001 | No force push was ever attempted | No |
+| BG003 | Maven throughout; Gradle never invoked | No |
+| BG004 | No `spring-boot:run`/`bootRun`/`--continuous`/`-t` was ever run | No — **and note why: the controller forbade starting the app by policy, which is exactly what BG004 exists to enforce. The rule's protection was never actually tested here.** |
+| BG005 | No `rm -r` near a wrapper or lockfile | No |
+| BG006 | No `-Dspring.jpa.hibernate.ddl-auto=` on any command line | No |
+| SB002 | `@Autowired` never preceded a constructor | No |
+| SB003 | 4 `@Transactional`, all on public types/methods | Yes — `RepoSyncer.sync` is `public` |
+| SB004 | No `@Transactional` in any controller file; boundaries on the services | Yes — 4 `@RestController`s coexist with 4 `@Transactional` services |
+| SB005 | All 5 associations explicitly `FetchType.LAZY` | Yes — and a literal `"FetchType.EAGER"` string in a linted test file correctly did **not** fire |
+| SB007 | `ddl-auto: validate` | Yes — rule ran on `application.yml` and passed |
+| SB008 | No `@Query` anywhere; all derived query methods | No |
+| SB009 | 4 class-level `@RequestMapping`, path only, no `method =` | Yes — and a literal `"@RequestMapping(method = …)"` string in a linted test file correctly did **not** fire |
+| SB010 | No Spring Security on the classpath at all | No |
+| SB011 | No `SecurityFilterChain` anywhere | No |
+| SB012 | `github.token: ${GITHUB_TOKEN:}`, `password: ${DB_PASSWORD:showcase}` — both `${…}` references, never literals | Yes — rule ran on `application.yml` and `application-local.yml` and correctly passed both. See the bucket correction above: the `compose.yaml` scope gap is a *latent* gap, not an observed miss |
+| SB013 | `management.endpoints.web.exposure.include: health,info` | Yes |
+| SB014 | Every import is `jakarta.*`; zero `javax.` | No |
+| SB015 | No `System.out`/`System.err`/`printStackTrace` in main sources | No |
+| SB016 | 4 `catch` blocks, every one with a body | Yes |
+| SB017 | No `Thread.sleep` in test sources | No |
+| SB018 | JUnit 5 throughout; zero `org.junit.` non-jupiter imports, zero `@RunWith` | No |
+| SB019 | 4 × `@MockitoBean`; zero `@MockBean`/`@SpyBean` | Yes — severity gate satisfied (`boot_major: 4`), rule ran, correctly silent. One of the two rules the Boot 4 decision existed to exercise |
+| SB020 | 7 imports, all `com.fasterxml.jackson.annotation.*` — the exemption | Yes — firing gate satisfied (`jackson_major: 3`), rule ran, exemption held. The other Boot 4 exercise rule |
+| SB102 | `spring.jpa.open-in-view: false` | Yes — gate satisfied (`data-jpa` in starters) |
+| SB103 | `RestClient` at 5 call sites; the only `RestTemplate` token is a javadoc mention (comments are blanked before matching) | Yes — gate satisfied (`boot_major: 4`) |
+| SB104 | No `.csrf(` anywhere | No |
+| SB105 | `allowedOrigins("http://localhost:4200")` — enumerated, not `*` | Yes |
+| SB107 | Zero `@Value` in the codebase; config binds through a `@ConfigurationProperties` record | No |
+| SB108 | No `new ObjectMapper(`/`new JsonMapper(` | No |
+| SB109 | All 4 `*ControllerTest` files use `@WebMvcTest`; the 2 `@SpringBootTest` files are `ShowcaseApplicationTests` and `SyncServiceTest`, neither matching the name pattern | Yes |
+| SB112 | All 5 `@ManyToOne` carry an explicit `fetch =` | Yes — 7 entity files, evaluated per occurrence |
+
+**Bucket totals: 5 fired, 32 could not fire here (1 by gating, 31 because the
+pattern never occurred), 2 should have fired and did not. 5 + 32 + 2 = 39.**
+
+Read that middle column honestly. **14 of the 32 had their trigger surface
+genuinely present** — a real `@ManyToOne`, a real `@RestController`, a real
+`catch`, a real config key — and the rule ran and correctly said nothing.
+That is meaningful negative evidence. The other 18 had no occasion to run at
+all (no Spring Security, no Lombok, no `@Query`, no Gradle, no JUnit 4), and
+their silence says nothing about them either way. Distinguishing these two is
+the difference between "this rule works" and "this rule is untested".
+
+## Verdicts on the design's open questions
+
+### Plugin coexistence
+
+**They coexisted cleanly at the lint layer and collided at two other layers —
+one cosmetic, one real.**
+
+**Profiles: coexisted, no conflict.** Both `SessionStart` detectors ran and
+both wrote their own dotfile at the same repo root, side by side and
+mutually invisible: `.angular-guide-project.json` and
+`.spring-boot-guide-project.json` (a third, `.ios-from-web-guide-project.json`,
+is also present from an unrelated installed plugin, correctly reporting
+`is_ios_project: false`). Neither detector read or overwrote the other's file.
+`spring-boot-guide`'s `detect_project.sh` walked up to two levels to find the
+nested `backend/pom.xml` in this monorepo and resolved
+`project_root: …/backend` while `workspace_root` stayed at the repo root —
+which is exactly the monorepo case its README documents, and it worked on the
+first try.
+
+**File-type routing: no cross-firing, by construction.** Both `hook-lint.sh`
+scripts gate on extension within ten lines of reading the file path:
+`angular-guide` does `case "$EXT" in ts|html) ;; *) exit 0 ;;` and
+`spring-boot-guide` does `case "$EXT" in java|properties|yml|yaml) ;; *) exit 0 ;;`.
+The sets are disjoint. Over the whole project: **no NG rule ever fired on a
+`.java`, `.yml` or `.sql` file, and no SB rule ever fired on a `.ts` or
+`.html` file.** Both also resolve their profile by walking up **from the
+edited file** rather than from `$PWD`, so editing a backend file from a
+frontend cwd (and vice versa) resolves correctly. This is the clean result.
+
+**Bash guards: the one real collision.** Neither plugin's `bash-guard.sh`
+gates on file type — there is no file to gate on — and `angular-guide`'s
+BG004/BG005 have no profile gate either, so **both guards inspect every Bash
+command in the repository, whatever you are working on.** That is how
+`angular-guide`'s BG004 came to block a command issued while working on the
+Spring backend (Task 11's ledger append, from the repo root). The guards do
+not conflict with each other — they just both always run — but the effect is
+that an Angular rule can block Java work and vice versa. Fixable by gating a
+Bash guard on the workspace the command is actually running in, though that
+is genuinely hard for an arbitrary shell command.
+
+**ID namespace collision: cosmetic but confusing.** Both plugins number their
+Bash guards `BG001`-`BG006`, and the meanings are entirely different —
+`spring-boot-guide`'s BG002 is "bare `mvn` when a wrapper exists" while
+`angular-guide`'s BG002 is "`ng build --prod`, removed in Angular 12";
+`spring-boot-guide`'s BG004 is "`spring-boot:run` will hang the session"
+while `angular-guide`'s BG004 is "`ng test` will hang the session". Both emit
+output prefixed with the bare ID. **A reader of a transcript, or of these
+logs, cannot tell which plugin spoke without reading the message body.** This
+caused a real attribution problem while writing this synthesis. Recommend
+prefixing the ID with the plugin (`SBG-BG004` / `NG-BG004`) or namespacing it
+in the output line.
+
+**Verdict: coexistence is safe. Run them together.** The one behaviour to be
+aware of is that Bash guards are workspace-blind; the one thing to fix is the
+shared ID namespace.
+
+### Detection after the restructure
+
+`angular.json` moved from the repo root to `frontend/` in Task 1, and
+`backend/` was created as a sibling with its own `pom.xml`. Both plugins'
+detection survived, for different reasons:
+
+- `angular-guide`: survived by coincidence rather than design. `find_profile()`
+  never reads the `workspace_root` field it writes and never looks for
+  `angular.json` at lint time — it walks up from the edited file looking only
+  for the profile dotfile, which happens to sit on an ancestor path of
+  everything. The `workspace_root` value is now stale and inert.
+- `spring-boot-guide`: survived by design. `detect_project.sh` explicitly
+  walks up to two directory levels to find a nested manifest — the monorepo
+  case is a documented feature, and `backend/pom.xml` was found correctly with
+  `project_root` and `workspace_root` recorded as different paths.
+
+**Verdict: detection is robust to this restructure in both plugins, but only
+one of them is robust on purpose.**
+
+### Agent value — did the three review agents find what the hooks could not?
+
+**Yes, decisively, with two measured instances on real code with the defect
+live — and with one important caveat that cuts the other way.**
+
+The two instances:
+
+1. **Task 10, SB111 vs. `jpa-review`, same unmodified code.** SB111 was
+   silent on the planted double N+1. `jpa-review`, dispatched against the
+   identical tree before any fix, caught it, identified it as a *double* N+1
+   spanning `Finding.java` / `Rule.java` / `FindingService.java`, located the
+   unbounded `GET /api/findings` endpoint as the reason it mattered, and
+   recommended the exact `@EntityGraph` that fixed it. Verified by a reviewer
+   against pre-fix line numbers, so the transcript was captured against the
+   real defective state.
+2. **Task 14, SB110 vs. `spring-architecture-review`.** SB110 was silent on
+   an `@Entity` crossing into a `@RestController`. The architecture agent
+   found it, and named the rule's own blind spot unprompted: "the package is
+   `github`, not `entity`, which is exactly the case the per-file SB110
+   heuristic cannot see."
+
+Beyond those two, this run's agents produced findings no regex rule in the set
+could express: the `RepoSyncer`-reaches-into-two-other-features boundary
+violation with its triplicated business-key derivation (raised independently
+by two of three agents); `SyncService` having no transaction boundary at all;
+the missing `finding` test package; and — the best single finding of the
+Task 14 round — every entity's `equals` reading `that.field` directly instead
+of `that.getField()`, which silently returns false against an uninitialized
+lazy proxy, in a codebase where **every** `@ManyToOne` is `LAZY`.
+
+**The caveat, which matters as much as the result.** That `equals` defect was
+in `Plugin`/`Rule`/`Skill` from Task 4, and Task 4's own `jpa-review` run
+looked at those exact files and reported the equality implementations as
+"well-formed" — and I recorded a true-negative verdict agreeing with it. Two
+independent readers, agent and human, ratified a real defect as clean, and it
+took a third look eight tasks later to catch it. **An agent's clean report is
+not a proof, and agents are not deterministic checkers.** The correct
+conclusion is not "agents dominate hooks"; it is that hooks give you a fast,
+deterministic, always-on floor with known blind spots, and agents give you
+cross-file reasoning with non-deterministic recall. Each covers the other's
+failure mode, and neither covers its own. **Ship both, and do not let a clean
+agent report retire a rule.**
+
+## Assessment against the spec's five success criteria
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | The backend builds and runs locally; all three front-end routes render against it. | **Partially met — see below. Do not read this as fully verified.** |
+| 2 | Every hook firing during the build is recorded and triaged. | **Met** — 7 firings, each with rule id, verbatim hook output, the exact code, a verdict and an action |
+| 3 | A concrete prioritised fix list for v1.1, or a plain statement that none is warranted | **Met** — 11 rows above, 3 at P0, each with per-row evidence |
+| 4 | A verdict on plugin coexistence, and on whether `angular-guide`'s detection survived the restructure | **Met** — see "Plugin coexistence" and "Detection after the restructure" |
+| 5 | All three review agents dispatched at least once against real code, output triaged like a hook firing | **Met** — all three run in Task 14 against the finished backend (plus earlier runs in Tasks 4, 9 and 10); 22 findings triaged individually, including the two I judge noise |
+
+**Criterion 1, stated honestly.** What was actually verified, and how:
+
+- *The backend builds:* yes, by `./mvnw verify` — full build including Testcontainers
+  integration tests against a real `postgres:16-alpine`. **36 tests across 10 test classes, 0
+  failures, 0 errors, 0 skipped.**
+- *The front end builds and its tests pass:* yes — `npm test -- --watch=false` gives **52 tests
+  across 8 files, all passing**, and `npm run build` produces a clean production bundle (297 kB
+  initial, with `skills-page`, `rules-page`, `activity-page` and `contributor-card` each still
+  in their own lazy chunk).
+- *The backend runs locally, and all three routes render against it:* **not verified by hand.**
+  This was my constraint, not an oversight: agents were forbidden from starting the application
+  (`./mvnw spring-boot:run` never exits — it is what `spring-boot-guide`'s own BG004 exists to
+  block — and running the app is the user's job, not an agent's). Task 12's Step 6, which
+  specified a manual end-to-end check against a live backend and then against a stopped one to
+  exercise the degraded and failed states, was therefore **never performed**.
+
+So the front end's wiring to the backend is verified by **unit and component tests plus a
+production build**, not by a human loading the pages. Specifically unverified end to end: that
+a running backend actually serves the five endpoints the front end calls with the field names
+the DTOs declare (the DTO-to-TypeScript field mapping *was* verified statically, record by
+record, during Task 11's review — but statically); that the stale-notice renders on a real
+degraded response; and that the error-state renders against a genuinely stopped backend. A
+reader should treat criterion 1 as "builds green, integration-tested at the repository layer,
+not smoke-tested through the UI."
+
+This does not affect any finding in this document — every plugin result above comes from hook
+output, rule source, or agent analysis, none of which depends on the application having been
+run.
+
+## Was the plugin worth having?
+
+Yes, and more clearly than the sibling `angular-guide` log could claim for its
+own plugin — but the honest reason is narrower than the headline numbers
+suggest.
+
+**The case for.** Every rule that ran behaved as documented. The one planted
+defect a hook could see, a hook caught (SB101) — and caught it in the only
+circumstance where a static rule genuinely earns its keep: all four tests
+passed with the bug live, so nothing else in the project would have found it.
+The two Boot 4 rules the whole technology choice was made to exercise (SB019
+on `@MockitoBean`, SB020 on the Jackson annotation exemption) both held their
+exemptions against real trigger surface. The literal-stripping architecture
+prevented an entire class of false positive that the sibling plugin hit three
+times in the same workspace. And 14 rules ran against genuinely present
+trigger surface and correctly said nothing, which is what a blocking rule set
+is supposed to do most of the time.
+
+**The case against, plainly.** Three of seven firings were false, all from one
+uncorrected bug, and that bug is not random: **SB106 misfires hardest on the
+naming that the plugin's own `project-structure` skill tells you to adopt.**
+Follow the plugin's structural advice and you get false blocks. That same
+collision appears a second time in SB110, which is keyed to a layered
+`.entity.` package layout that the same skill steers you away from — so
+following the plugin's advice also turns one of its rules off. **Two of the
+three most serious findings in this document are the plugin disagreeing with
+itself**, and neither would ever surface in a fixture suite, because fixtures
+are written rule-by-rule and this is an interaction between a rule and a
+skill.
+
+**What the mutation gate could not have told them.** The gate proves every
+detector is load-bearing for its own fixture. It cannot produce a single row
+of the "should have fired and did not" table, cannot detect that a rule's
+implementation contradicts a skill's advice, and cannot notice that the entire
+enforcement surface has a hole where `Bash` writes files. All three of this
+project's most valuable findings are of exactly those kinds. That is the
+argument for running a plugin against real code, and it is the thing this
+exercise was built to demonstrate.
