@@ -545,6 +545,28 @@ indirectly via the full-suite compile+boot; the DTO shape and the N+1 fix
 itself are covered by the `jpa-review` agent's static analysis rather than a
 new repository-level query-count test, which Task 10 does not add).
 
+### SB106 — recurrence, "github" field vs. package segment collision (final fix wave, fix 5/6)
+**Code:** every `Edit` of `backend/src/main/java/com/jmorgan/showcase/github/RepoSyncer.java`
+during the fix-5 (empty-README-is-a-failure) and fix-6 (upstream-deletion
+propagation) changes re-fired:
+```
+⚠️  SB106: Constructor-injected field is not `final`.
+   💡 Fix: Declare it `private final`.
+```
+**Verdict:** false positive — the same bug already documented above in "SB106
+— false positive, 'github' field vs. package segment collision (Task 8)".
+`RepoSyncer.java` sits in package `com.jmorgan.showcase.github` and declares
+`private final GithubClient github;`; the checker's first-match scan locks
+onto the `package com.jmorgan.showcase.github;` statement before it ever
+reaches the real (and genuinely `final`) field declaration. Every field in
+`RepoSyncer` is `private final` both before and after this wave's edits — no
+code change was made in response.
+**Action:** none — recorded per the task instruction to log every hook firing
+before working around it. No rule was weakened or disabled; this is the same
+structural rule bug already on file, now confirmed to retrigger on every
+subsequent edit of the one file whose package name and a field name
+permanently collide.
+
 ---
 
 ## Agent reviews (Task 4, Step 9)

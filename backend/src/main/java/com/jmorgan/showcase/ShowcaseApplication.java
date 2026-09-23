@@ -4,11 +4,14 @@ import com.jmorgan.showcase.github.GithubClientProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.scheduling.annotation.EnableScheduling;
 
+/**
+ * Does not carry {@code @EnableScheduling} itself — see
+ * {@link SchedulingConfig} for why that lives in its own profile-gated
+ * configuration class instead.
+ */
 @SpringBootApplication
 @EnableConfigurationProperties(GithubClientProperties.class)
-@EnableScheduling
 public class ShowcaseApplication {
 
     public static void main(String[] args) {

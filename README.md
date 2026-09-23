@@ -1,16 +1,20 @@
 # angular-guide showcase
 
-An Angular v22 dashboard for [`angular-guide`](https://github.com/j-morgan6/angular-guide),
-the Claude Code plugin this app was built under. The app itself is the vehicle — it exists
-to display the plugin's rules and skills against the plugin's own real source, live from
-GitHub — but **[`docs/plugin-findings.md`](docs/plugin-findings.md) is the actual
-deliverable**: a validation record of every rule the plugin fired (and several it didn't)
-while building this project, and a closing verdict on whether the plugin was worth having.
+An Angular v22 dashboard, backed by a Spring Boot 4.1 API, for
+[`angular-guide`](https://github.com/j-morgan6/angular-guide), the Claude Code plugin this app
+was built under. The app itself is the vehicle — it exists to display the plugin's rules and
+skills against the plugin's own real source — but
+**[`docs/plugin-findings.md`](docs/plugin-findings.md)** and
+**[`docs/spring-plugin-findings.md`](docs/spring-plugin-findings.md)** are the actual
+deliverables: validation records of every rule each plugin fired (and several it didn't) while
+building this project, and a closing verdict on whether each plugin was worth having.
 
-- **Deployed (once `.github/workflows/deploy.yml` runs on `master`):**
-  https://j-morgan6.github.io/angular-guide-showcase/
 - **The plugin this app displays:** https://github.com/j-morgan6/angular-guide
-- **The validation record:** [`docs/plugin-findings.md`](docs/plugin-findings.md)
+- **The validation records:** [`docs/plugin-findings.md`](docs/plugin-findings.md) (angular-guide)
+  and [`docs/spring-plugin-findings.md`](docs/spring-plugin-findings.md) (spring-boot-guide)
+
+This project is deployable, not deployed: both halves build, test, and run, but nothing in this
+repository is hosted anywhere today. See "Local development" below to run it yourself.
 
 ## What it shows
 
@@ -18,42 +22,39 @@ Three routes, each lazily loaded (`loadComponent`, never `component:` — the pl
 NG101 requires this, and `frontend/src/app/app.spec.ts` asserts it structurally so a future
 eager route fails the test suite, not just the hook):
 
-- **Rules** — the plugin's rule table, parsed live from its README.
+- **Rules** — the plugin's rule table, ingested by the backend from its README and served
+  from Postgres.
 - **Skills** — the plugin's nine skill documents, rendered from real markdown through a
   hand-written token renderer (no `[innerHTML]`, no `bypassSecurityTrustHtml` — NG014 bans
   both, and `frontend/src/app/ui/markdown/` composes real components from `marked`'s token
   tree instead).
 - **Activity** — commits and contributors on the plugin's own repository.
 
+## How it's built
+
+The repository is two halves that run independently but together form the app:
+
+- **`backend/`** — a Spring Boot 4.1 service that periodically syncs two Claude Code plugin
+  repositories (`angular-guide` and `spring-boot-guide`) from the GitHub REST API into its own
+  Postgres database, then serves that data through a read-only REST API
+  (`/api/plugins/{slug}/rules`, `/skills`, `/activity/commits`, `/activity/contributors`, and
+  `/api/sync/status`). Ingestion runs on a schedule (`github.sync-interval` in
+  `application.yml`, default every 6 hours, plus once shortly after startup); the app itself
+  never talks to GitHub from the browser.
+- **`frontend/`** — the Angular v22 dashboard. It reads only from the backend's API
+  (`frontend/src/app/core/api/showcase-api.ts`); it has no GitHub credentials or rate limit of
+  its own, because it never calls GitHub directly. Only one plugin (`angular-guide`) is shown
+  at a time today, even though the backend ingests and serves both — a plugin switcher is the
+  natural follow-up.
+
+A failed or slow sync doesn't hide bad data behind a blank page: `/api/sync/status` reports
+whether the last sync succeeded, and the front end renders a visible staleness notice — stale
+data with a visible marker beats a dashboard that silently looks fresh and empty.
+
 ## Local development
 
-The repository is two independent halves: an Angular workspace in `frontend/` and a
-Spring Boot workspace in `backend/`. Neither depends on the other to build or test —
-the front end reads GitHub directly, and the backend (once running) reads GitHub
-through a sync job into its own Postgres database. Nothing in this repository is
-deployed today except the front end (see above); the backend is written, tested, and
-buildable, and is meant to be run locally.
-
-### Front end
-
-```bash
-cd frontend
-npm install
-npx ng serve
-```
-
-Then open `http://localhost:4200/`.
-
-To run the test suite:
-
-```bash
-cd frontend
-npx ng test --watch=false
-```
-
-(`ng test` alone runs in watch mode and will hang a non-interactive shell; there is no
-`--run` flag on this toolchain's Vitest builder — see the BG004 entries in
-`docs/plugin-findings.md`.)
+Neither half depends on the other to build or test. To see the full app working, run Postgres
+and the backend first, then the front end against it.
 
 ### Backend
 
@@ -90,24 +91,37 @@ stack (`docker compose up`), but this project deliberately never runs it: writin
 building the image is what this repository validates, not deploying it. See
 `docs/spring-plugin-findings.md` for the deployment-configuration findings.
 
-## Live data, unauthenticated
+### Front end
 
-Every route reads the GitHub REST API directly from the browser with no token, which caps
-this app — and every visitor sharing an IP with it — at **60 requests per hour**. Resources
-are created once at root scope (`GithubApi`, `@Service()`) and reused across navigation, so
-a normal browsing session stays well inside that budget without a manual cache.
+With the backend running on `http://localhost:8080/` (see above):
 
-If the limit is hit, the footer shows a "GitHub rate limit reached" notice and each affected
-section — including `/activity`'s deferred contributors block and `/skills`'s per-skill
-document, not just the four root resources — renders `error-state` with a rate-limit
-explanation and, when GitHub's `x-ratelimit-reset` header is present, the local time it
-resets at, instead of a generic failure message. The two are deliberately distinct, since a
-rate-limited user needs to know to wait, not to retry harder.
+```bash
+cd frontend
+npm install
+npx ng serve
+```
+
+Then open `http://localhost:4200/`. `ng serve` proxies `/api/*` to `http://localhost:8080`
+(`frontend/proxy.conf.json`); the built production bundle expects `/api` to be served from the
+same origin it's deployed on, so it is never hosted separately from a backend that can answer
+that path.
+
+To run the test suite:
+
+```bash
+cd frontend
+npx ng test --watch=false
+```
+
+(`ng test` alone runs in watch mode and will hang a non-interactive shell; there is no
+`--run` flag on this toolchain's Vitest builder — see the BG004 entries in
+`docs/plugin-findings.md`.)
 
 ## Why this exists
 
-This project was built to validate `angular-guide` against real code, not to demonstrate
-Angular technique for its own sake. `docs/plugin-findings.md` is the log of every hook
-firing encountered while building it — true positives, false positives, and the rules that
-stayed silent on correct code — plus a closing synthesis on whether the plugin, on net,
-caught more real mistakes than it cost in friction.
+This project was built to validate `angular-guide` and `spring-boot-guide` against real code,
+not to demonstrate technique for its own sake. `docs/plugin-findings.md` and
+`docs/spring-plugin-findings.md` are the logs of every hook firing encountered while building
+it — true positives, false positives, and the rules that stayed silent on correct code — plus a
+closing synthesis on whether each plugin, on net, caught more real mistakes than it cost in
+friction.

@@ -14,7 +14,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Carries the transactional body of a single repo's sync.
@@ -69,29 +71,62 @@ public class RepoSyncer {
         return ruleCount;
     }
 
+    /**
+     * An empty README body is indistinguishable from "the repo genuinely has
+     * zero rules" unless it is treated as a failure: {@link GithubClient}
+     * swallows a 404/5xx from GitHub and returns {@code ""} either way. Left
+     * unchecked, that empty body parses to zero rules, the sync "succeeds"
+     * with {@code rulesSynced: 0}, and the dashboard renders a fresh-looking
+     * "0 of 0 rules" instead of the stale-data marker the spec requires. This
+     * exception propagates out of {@link #sync}; {@code SyncService.syncAll}
+     * already catches {@code RuntimeException} and records the run as
+     * {@code FAILED}, which is the whole point — a visibly stale dashboard
+     * beats a silently empty one.
+     */
     private int syncRules(Plugin plugin, String repoFullName) {
-        List<ParsedRule> parsed = RuleTableParser.parse(github.fetchFile(repoFullName, "README.md"));
+        String body = github.fetchFile(repoFullName, "README.md");
+        if (body == null || body.isEmpty()) {
+            throw new IllegalStateException(
+                    "README.md for " + repoFullName + " came back empty — GitHub fetch failed "
+                            + "or the file is genuinely missing; refusing to record a zero-rule sync as success");
+        }
+        List<ParsedRule> parsed = RuleTableParser.parse(body);
+        Set<String> seenKeys = new HashSet<>();
         for (ParsedRule p : parsed) {
             String key = plugin.getSlug() + ":" + p.ruleId();
+            seenKeys.add(key);
             Rule rule = rules.findByRuleKey(key)
                     .orElseGet(() -> new Rule(plugin, p.ruleId(), p.kind(), p.trigger(), p.fix(), p.gate()));
             rule.update(p.kind(), p.trigger(), p.fix(), p.gate());
             rules.save(rule);
         }
+        // Upstream deletions propagate here: anything for this plugin that
+        // was not just seen in the README table is gone from the source and
+        // must not keep serving from /api/plugins/{slug}/rules.
+        rules.deleteByPluginSlugAndRuleKeyNotIn(plugin.getSlug(), seenKeys);
         return parsed.size();
     }
 
     private void syncSkills(Plugin plugin, String repoFullName) {
-        for (String name : github.listSkillNames(repoFullName)) {
+        List<String> names = github.listSkillNames(repoFullName);
+        Set<String> seenKeys = new HashSet<>();
+        for (String name : names) {
+            String key = plugin.getSlug() + ":" + name;
+            seenKeys.add(key);
             String body = github.fetchFile(repoFullName, "skills/" + name + "/SKILL.md");
             if (body.isEmpty()) {
                 continue;
             }
-            Skill skill = skills.findBySkillKey(plugin.getSlug() + ":" + name)
+            Skill skill = skills.findBySkillKey(key)
                     .orElseGet(() -> new Skill(plugin, name, body));
             skill.updateBody(body);
             skills.save(skill);
         }
+        // Same deletion propagation as syncRules, keyed off the directory
+        // listing rather than which SKILL.md fetches happened to succeed, so
+        // a single transient file-fetch failure doesn't delete a skill that
+        // is still present upstream.
+        skills.deleteByPluginSlugAndSkillKeyNotIn(plugin.getSlug(), seenKeys);
     }
 
     private void syncCommits(Plugin plugin, String repoFullName) {
