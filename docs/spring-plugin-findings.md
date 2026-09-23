@@ -159,6 +159,152 @@ Task 14's coverage audit records this as "could not fire here" rather than
 "should have fired and did not."
 **Action:** none.
 
+### SB019 check — `@MockitoBean` in SyncServiceTest (Task 8)
+**Code:**
+```java
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+...
+@MockitoBean
+private GithubClient github;
+```
+in `backend/src/test/java/com/jmorgan/showcase/github/SyncServiceTest.java`.
+**Verdict:** no firing observed — did not fire, and correctly so.
+**Why:** SB019 blocks `@MockBean`, which is removed at Boot 4. `@MockitoBean`
+is the Boot 4-correct replacement (confirmed present at
+`org.springframework.test.context.bean.override.mockito.MockitoBean` in
+`spring-test-7.0.8.jar`, no relocation needed) and is a different annotation,
+not merely a renamed alias SB019 also happens to catch — so the write went
+through with no `PreToolUse` block and no advisory. This is the outcome the
+task explicitly gates on: SB019 must not fire on `@MockitoBean`, and it did
+not.
+**Action:** none — recorded per the brief's instruction to note the outcome
+either way; no false positive and no missed block.
+
+### SB101 — SyncService.syncAll() → this.syncRepo(...) self-invocation (Task 8, deliberate)
+**Code (as first written, verbatim from the brief):**
+```java
+@Scheduled(initialDelayString = "PT5S", fixedDelayString = "${github.sync-interval}")
+public void syncAll() {
+    ...
+    for (String repo : properties.repos()) {
+        total += syncRepo(repo);   // self-invocation
+    }
+    ...
+}
+
+@Transactional
+public int syncRepo(String repoFullName) { ... }
+```
+in `backend/src/main/java/com/jmorgan/showcase/github/SyncService.java`.
+**Verbatim output:**
+```
+⚠️  SB101: `@Transactional` method called from inside the same class.
+   💡 Fix: Move the transactional method to a separate bean, or inject a proxy of this class into itself.
+   Spring applies @Transactional through a proxy that wraps the bean. A call from another method of the same instance goes straight to `this`, bypassing the proxy entirely — so no transaction starts, and no error says so.
+   This rule is advisory rather than blocking because overloaded and inherited method names can make it misfire. Verify before changing anything.
+   See: transactions skill
+```
+**Verdict:** true positive.
+**Why:** this is exactly the defect the brief planted on purpose. `syncAll()`
+calls `syncRepo(...)` on `this`; `syncRepo` carried `@Transactional`. Spring's
+proxy-based AOP only intercepts calls that arrive through the bean's proxy —
+a same-instance call bypasses it, so the annotation was a no-op. Confirmed
+empirically too: with the defect still in place, all four `SyncServiceTest`
+tests passed anyway (`./mvnw -Dtest=SyncServiceTest test`, 4/4 green) — the
+bug is silent by nature, exactly as SB101's message says ("no error says
+so"), and would not have been caught by this test suite without the advisory.
+**Fix match:** the rule offered two options — "move the transactional method
+to a separate bean" or "inject a proxy of this class into itself." The task
+brief's amended Step 5 specifies the first option, with a twist: keep
+`syncRepo` as the public entry point on `SyncService` (tests and the future
+`SyncController` depend on that name/location) and extract only the
+transactional body into a new `RepoSyncer` bean; `SyncService.syncRepo` then
+delegates (`return repoSyncer.sync(repoFullName);`) with no `@Transactional`
+of its own. That is the suggested fix's first branch, applied at the method
+level rather than the whole class — the advisory's phrasing doesn't
+anticipate "keep the same public method name and just move the body," but
+the underlying mechanism (cross-bean call goes through the proxy) is
+identical to what it recommended. The self-proxy alternative was not used;
+splitting the bean is the cleaner resolution per the brief.
+**Action:** created `backend/src/main/java/com/jmorgan/showcase/github/RepoSyncer.java`
+(`@Service`, `@Transactional int sync(String repoFullName)` carrying the body
+that used to be in `syncRepo`, plus the four private helper methods it calls).
+`SyncService.syncRepo` now reads `return repoSyncer.sync(repoFullName);` and
+no longer carries `@Transactional`. Re-verified: writing the fixed
+`SyncService.java` produced no SB101 (or any other) advisory output, and
+`./mvnw test` is 25/25 green (`./mvnw -Dtest=SyncServiceTest test` is 4/4).
+
+### SB106 — false positive, "github" field vs. package segment collision (Task 8)
+**Code:** `private final GithubClient github;` in both
+`backend/src/main/java/com/jmorgan/showcase/github/SyncService.java` (before
+the Step 5 fix) and `backend/src/main/java/com/jmorgan/showcase/github/RepoSyncer.java`
+(after it) — the field is declared `final` in both, exactly as the brief
+specifies.
+**Verbatim output (fired on both writes):**
+```
+⚠️  SB106: Constructor-injected field is not `final`.
+   💡 Fix: Declare it `private final`.
+   `final` documents that the dependency is fixed for the life of the bean and lets the compiler prove nothing reassigns it. It also makes accidental field injection impossible to add later without noticing.
+   See: spring-boot-essentials skill
+```
+**Verdict:** false positive.
+**Why:** traced the checker (`check_sb106` in `hook-lint.sh`, `spring-boot-guide` v1.0.0)
+by running its embedded Python snippet directly against the written file. For
+each constructor-assigned field name, it scans the *entire source file* for
+the first line matching `^[^\n;]*\bNAME\s*(?:;|=)` that isn't inside a
+method/constructor body, and flags the field if that line lacks `final`. For
+the field named `github` in package `com.jmorgan.showcase.github`, the
+*first* such match in the file is not the field declaration — it's the
+package statement itself: `package com.jmorgan.showcase.github;`. `github`
+there is immediately followed by `;`, satisfies the regex, sits outside every
+body span, and comes before the real `private final GithubClient github;`
+declaration further down the file — so the checker locks onto the package
+statement, finds no `final` on it, and flags the field that never had the
+problem. Verified directly:
+```
+$ python3 <embedded check_sb106 snippet> backend/.../SyncService.java
+github -> 'package com.jmorgan.showcase.github;' FLAGGED - NOT FINAL
+skills -> '    private final SkillRepository skills;' FINAL_OK
+...
+```
+This is a structural bug in the rule, not specific to this file — any class
+declaring a field whose name equals the last segment of its own package (here,
+literally unavoidable in `com.jmorgan.showcase.github` for anything named
+`github`) will falsely trip SB106 regardless of how the field is actually
+declared.
+**Action:** none — no code change. The field is genuinely `final` in both
+files as committed; renaming it to dodge a hook bug would be evading the
+rule's intent rather than satisfying it, which the task brief explicitly
+prohibits. Recorded so a future plugin fix can special-case package/import
+statements out of the "declaration" scan.
+
+### SB113 — 8-parameter constructor on the original SyncService (Task 8, expected)
+**Code:** the brief's `SyncService` constructor takes `GithubClient`,
+`GithubClientProperties`, `PluginRepository`, `RuleRepository`,
+`SkillRepository`, `CommitRepository`, `ContributorRepository`,
+`SyncRunRepository` — 8 dependencies.
+**Verbatim output:**
+```
+⚠️  SB113: Constructor takes 8 parameters. Past ~7 dependencies the class is doing several jobs; split it.
+   See: component-structure guidance in the project-structure skill
+```
+**Verdict:** true positive, and resolved as a side effect of the SB101 fix.
+**Why:** the brief wrote `SyncService` as a single class doing repo
+orchestration, rule/skill/commit/contributor upserts, and run bookkeeping all
+at once — exactly the "doing several jobs" shape SB113 warns about. It fired
+correctly. Splitting `RepoSyncer` out to resolve SB101 happened to fix this
+too: post-split, `SyncService`'s constructor takes 3 parameters
+(`GithubClientProperties`, `SyncRunRepository`, `RepoSyncer`) and
+`RepoSyncer`'s takes 6 (`GithubClient`, `PluginRepository`, `RuleRepository`,
+`SkillRepository`, `CommitRepository`, `ContributorRepository`) — still on
+the high side for `RepoSyncer` but under the 7-parameter threshold, and no
+SB113 output was produced on either rewritten file.
+**Action:** none beyond the SB101 split already performed. Worth noting for a
+future task: `RepoSyncer` at 6 dependencies is close enough to the threshold
+that adding a 7th (e.g. a `FindingRepository` for a later task) would retrip
+SB113 and warrant a further split (e.g. separating skill/commit/contributor
+sync from rule sync).
+
 ---
 
 ## Agent reviews (Task 4, Step 9)
