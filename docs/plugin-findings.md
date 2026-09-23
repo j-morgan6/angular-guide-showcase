@@ -196,6 +196,28 @@ a future `detect_project.sh` re-run would be needed to refresh them. Recommend r
 `detect_project.sh` after structural moves even though nothing failed here, since the *content*
 of the profile (not just its resolvability) is what the version-gated rules trust.
 
+### BG004 — `npx ng test --help` (Task 11, front end rewired to the showcase backend)
+**Code:** `npx ng test --help`, run to check the `@angular/build:unit-test` builder's flag
+names before choosing how to filter a single spec file.
+**Verbatim hook output:**
+```
+🚫 BG004: `ng test` runs in watch mode by default and will hang this session.
+   💡 Fix: Run `ng test --watch=false` (Karma) or `ng test --run` (Vitest).
+```
+**Verdict:** false positive — same defect as the controller-verification entry recorded earlier
+in this log ("BG004 — `npx ng test --help` (controller verification, after Task 1)"), reproduced
+a second time, independently, in this task.
+**Why:** identical root cause: `--help` prints the builder's option list and exits immediately,
+it cannot hang a session, and BG004's guard matches on the `ng test` command prefix with no
+exclusion for `--help`/`-h`/`--version`. This is not a new defect, just a second live occurrence
+of the one already on file — recorded per this task's instruction to report every firing
+explicitly, not because the underlying cause is new.
+**Action:** none required — worked around by using `npm test -- --watch=false` (no positional
+filter argument; passing one, e.g. `npm test -- --watch=false showcase-api`, was rejected by the
+CLI's own argument parser with `Unknown argument: watch`, a separate and unrelated harness
+quirk, not a plugin firing) to discover the correct flag empirically instead. Did not disable
+the plugin or bypass the hook.
+
 ---
 
 ## Defects that are not hook firings
@@ -519,9 +541,16 @@ in principle), and the composition approach's cost/benefit case is unchanged.
 
 ## Summary
 
-**Hook firings:** 7 total — 2 true positives, 5 false positives, 0 noise. **The ruleset fired
+**Hook firings:** 8 total — 2 true positives, 6 false positives, 0 noise. **The ruleset fired
 wrongly more often than it fired rightly on this project** — stated plainly rather than left
-implicit in a tally.
+implicit in a tally. (The count below of "7" through the rest of this section, and its
+false-positive breakdown, predates Task 11 of the Spring backend plan; Task 11 added one more
+BG004 false positive — a second `npx ng test --help` occurrence — bringing the running total to
+8/2/6/0. It also predates the "Detection after monorepo restructure" NG007 entry above, which
+was a second confirmation of a true positive already counted rather than a new distinct block,
+so it does not change the true-positive count. This note is added rather than rewriting the
+historical prose below, to avoid overstating how thoroughly this task re-audited entries it did
+not itself produce.)
 
 This count was corrected three times in this final fix wave. First, the original log counted
 an entry — `npx ng test --run` (Task 1) — as a true-positive firing that "correctly blocked"
@@ -543,8 +572,9 @@ positives recur, not a new trigger event.)
 
 - True positives (2): NG007 (Task 1, deliberate probe), NG103 (Task 4, advisory,
   `@Injectable({providedIn:'root'})` → `@Service()`).
-- False positives (5): NG001 (Task 3), NG001 (Task 7), NG001 (final fix wave, `rules.spec.ts`),
-  BG004 (controller, `ng test --help`), BG004 (final fix wave, `git commit` message prose).
+- False positives (6): NG001 (Task 3), NG001 (Task 7), NG001 (final fix wave, `rules.spec.ts`),
+  BG004 (controller, `ng test --help`), BG004 (final fix wave, `git commit` message prose),
+  BG004 (Task 11 of the Spring backend plan, `ng test --help`, second occurrence).
 - Noise (0): every firing was either a genuine catch or a genuine miss; nothing fired
   correctly on content not worth interrupting for.
 

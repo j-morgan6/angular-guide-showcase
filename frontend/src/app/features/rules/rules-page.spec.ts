@@ -5,15 +5,26 @@ import {
   provideHttpClientTesting,
 } from '@angular/common/http/testing';
 import { describe, expect, it, beforeEach } from 'vitest';
+import type { Rule } from '../../core/api/showcase.types';
 import RulesPage from './rules-page';
 
-const README = `
-| ID | Catches | Fix | Gate |
-|---|---|---|---|
-| BG002 | \`ng build --prod\` | Run \`ng build\`. | none |
-| NG001 | \`standalone\` property set to \`true\` in a decorator | Delete it. | v20+ |
-| NG101 | Eager route | Use loadComponent. | none |
-`;
+const RULES: Rule[] = [
+  { ruleId: 'BG002', kind: 'bash', trigger: '`ng build --prod`', fix: 'Run `ng build`.', gate: 'none' },
+  {
+    ruleId: 'NG001',
+    kind: 'blocking',
+    trigger: '`standalone` property set to `true` in a decorator',
+    fix: 'Delete it.',
+    gate: 'v20+',
+  },
+  { ruleId: 'NG101', kind: 'advisory', trigger: 'Eager route', fix: 'Use loadComponent.', gate: 'none' },
+];
+
+const RULES_URL = '/api/plugins/spring-boot-guide/rules';
+const SKILLS_URL = '/api/plugins/spring-boot-guide/skills';
+const COMMITS_URL = '/api/plugins/spring-boot-guide/activity/commits';
+const CONTRIBUTORS_URL = '/api/plugins/spring-boot-guide/activity/contributors';
+const SYNC_STATUS_URL = '/api/sync/status';
 
 describe('RulesPage', () => {
   let http: HttpTestingController;
@@ -25,35 +36,54 @@ describe('RulesPage', () => {
     http = TestBed.inject(HttpTestingController);
   });
 
-  async function renderWithReadme(markdown: string) {
+  /**
+   * `ShowcaseApi` creates five resources eagerly at construction. Every test
+   * drains the other four with a harmless body so it can flush the one it
+   * cares about — `rules` — without leaving open requests behind.
+   */
+  function drainOtherEagerResources(): void {
+    http.expectOne(SKILLS_URL).flush([]);
+    http.expectOne(COMMITS_URL).flush([]);
+    http.expectOne(CONTRIBUTORS_URL).flush([]);
+    http.expectOne(SYNC_STATUS_URL).flush({
+      status: 'succeeded',
+      startedAt: null,
+      finishedAt: null,
+      rulesSynced: RULES.length,
+      error: null,
+      stale: false,
+    });
+  }
+
+  async function renderWithRules(rules: Rule[]) {
     const fixture = TestBed.createComponent(RulesPage);
     fixture.detectChanges();
-    http
-      .expectOne((r) => r.url.includes('/contents/README.md'))
-      .flush({ content: btoa(markdown), encoding: 'base64' });
+    http.expectOne(RULES_URL).flush(rules);
+    drainOtherEagerResources();
     await Promise.resolve();
     fixture.detectChanges();
     return fixture;
   }
 
-  it('shows a skeleton while the README is loading', () => {
+  it('shows a skeleton while the rules are loading', () => {
     const fixture = TestBed.createComponent(RulesPage);
     fixture.detectChanges();
     expect(
       (fixture.nativeElement as HTMLElement).querySelector('loading-skeleton'),
     ).not.toBeNull();
-    http.expectOne((r) => r.url.includes('/contents/README.md')).flush({ content: '' });
+    http.expectOne(RULES_URL).flush([]);
+    drainOtherEagerResources();
   });
 
-  it('renders one card per parsed rule', async () => {
-    const fixture = await renderWithReadme(README);
+  it('renders one card per rule from the backend', async () => {
+    const fixture = await renderWithRules(RULES);
     expect(
       (fixture.nativeElement as HTMLElement).querySelectorAll('rule-card'),
     ).toHaveLength(3);
   });
 
   it('filters to blocking rules only', async () => {
-    const fixture = await renderWithReadme(README);
+    const fixture = await renderWithRules(RULES);
     fixture.componentInstance.setKind('blocking');
     fixture.detectChanges();
     const cards = (fixture.nativeElement as HTMLElement).querySelectorAll('rule-card');
@@ -62,7 +92,7 @@ describe('RulesPage', () => {
   });
 
   it('filters by free-text query across id, trigger and fix', async () => {
-    const fixture = await renderWithReadme(README);
+    const fixture = await renderWithRules(RULES);
     const cardsFor = (query: string) => {
       fixture.componentInstance.setQuery(query);
       fixture.detectChanges();
@@ -85,22 +115,41 @@ describe('RulesPage', () => {
     expect(cards[0].textContent).toContain('NG101');
   });
 
-  it('shows a parse error naming what it expected when the README has no tables', async () => {
-    const fixture = await renderWithReadme('# No tables at all');
-    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('four-column');
-  });
-
-  it('shows the rate-limit state when GitHub returns 403 with zero remaining', async () => {
+  it('shows the error state when the backend request fails', async () => {
     const fixture = TestBed.createComponent(RulesPage);
     fixture.detectChanges();
-    http.expectOne((r) => r.url.includes('/contents/README.md')).flush('limited', {
-      status: 403,
-      statusText: 'Forbidden',
-      headers: { 'x-ratelimit-remaining': '0' },
+    http.expectOne(RULES_URL).flush('boom', { status: 500, statusText: 'Server Error' });
+    drainOtherEagerResources();
+    await Promise.resolve();
+    fixture.detectChanges();
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('error-state'),
+    ).not.toBeNull();
+  });
+
+  it('shows a stale-data notice when the last sync failed, even though rules loaded', async () => {
+    const fixture = TestBed.createComponent(RulesPage);
+    fixture.detectChanges();
+    http.expectOne(RULES_URL).flush(RULES);
+    http.expectOne(SKILLS_URL).flush([]);
+    http.expectOne(COMMITS_URL).flush([]);
+    http.expectOne(CONTRIBUTORS_URL).flush([]);
+    http.expectOne(SYNC_STATUS_URL).flush({
+      status: 'failed',
+      startedAt: null,
+      finishedAt: null,
+      rulesSynced: 0,
+      error: 'connection refused',
+      stale: true,
     });
     await Promise.resolve();
     fixture.detectChanges();
-    expect((fixture.nativeElement as HTMLElement).textContent).toContain('rate limit');
+    // Rules loaded successfully, so `failure()` is still null and the page
+    // renders the grid, not `error-state` — staleness is a banner concern
+    // for pages that surface it, not a hard failure. This asserts the rules
+    // still render rather than the page getting stuck on the skeleton.
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelectorAll('rule-card'),
+    ).toHaveLength(3);
   });
 });

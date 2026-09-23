@@ -1,5 +1,5 @@
 import { Component, input } from '@angular/core';
-import type { Rule } from '../../core/parsing/rules';
+import type { Rule } from '../../core/api/showcase.types';
 
 @Component({
   selector: 'rule-card',
@@ -8,7 +8,7 @@ import type { Rule } from '../../core/parsing/rules';
       <header>
         <code class="id" [class.blocking]="rule().kind === 'blocking'"
               [class.advisory]="rule().kind === 'advisory'"
-              [class.bash]="rule().kind === 'bash'">{{ rule().id }}</code>
+              [class.bash]="rule().kind === 'bash'">{{ rule().ruleId }}</code>
         @if (rule().gate !== 'none') {
           <span class="gate">{{ rule().gate }}</span>
         }

@@ -1,5 +1,5 @@
 import { Component, input, output } from '@angular/core';
-import type { RuleKind } from '../../core/parsing/rules';
+import type { RuleKind } from '../../core/api/showcase.types';
 
 export type KindFilter = RuleKind | 'all';
 

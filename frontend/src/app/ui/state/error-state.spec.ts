@@ -73,6 +73,18 @@ describe('ErrorState', () => {
     expect(text).not.toContain('Invalid Date');
   });
 
+  it('shows the stale-data explanation, preferring the sync error text when present', () => {
+    const fixture = TestBed.createComponent(ErrorState);
+    fixture.componentRef.setInput('rateLimited', false);
+    fixture.componentRef.setInput('message', '');
+    fixture.componentRef.setInput('stale', true);
+    fixture.componentRef.setInput('syncError', 'connection refused');
+    fixture.detectChanges();
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('out of date');
+    expect(text).toContain('connection refused');
+  });
+
   it('falls back to "within the hour" rather than rendering Invalid Date when resetAt cannot parse to a valid time', () => {
     const fixture = TestBed.createComponent(ErrorState);
     fixture.componentRef.setInput('rateLimited', true);

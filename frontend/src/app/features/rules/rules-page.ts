@@ -1,6 +1,6 @@
 import { Component, computed, inject, signal } from '@angular/core';
-import { GithubApi } from '../../core/github/github-api';
-import { parseRules, parseRulesOrThrow, type Rule } from '../../core/parsing/rules';
+import { ShowcaseApi } from '../../core/api/showcase-api';
+import type { Rule } from '../../core/api/showcase.types';
 import { ErrorState } from '../../ui/state/error-state';
 import { LoadingSkeleton } from '../../ui/state/loading-skeleton';
 import { RuleCard } from './rule-card';
@@ -12,18 +12,19 @@ import { RuleFilters, type KindFilter } from './rule-filters';
   template: `
     <h1>Rules</h1>
     <p class="lede">
-      Parsed live from the plugin's own README. Add a rule to angular-guide and it
-      appears here without a redeploy.
+      Synced from the plugin's own repository by the showcase backend. Add a rule
+      to angular-guide and it appears here on the next sync, without a redeploy.
     </p>
 
-    @if (api.readme.isLoading()) {
+    @if (api.rules.isLoading()) {
       <loading-skeleton [rows]="6" />
     } @else if (failure(); as message) {
       <error-state
-        [rateLimited]="api.isRateLimited()"
+        [rateLimited]="false"
         [message]="message"
-        [resetAt]="api.rateLimitResetAt()"
-        (retry)="api.readme.reload()"
+        [stale]="api.isStale()"
+        [syncError]="api.syncError()"
+        (retry)="api.rules.reload()"
       />
     } @else {
       <rule-filters
@@ -34,7 +35,7 @@ import { RuleFilters, type KindFilter } from './rule-filters';
       />
       <p class="count">{{ visible().length }} of {{ rules().length }} rules</p>
       <div class="grid">
-        @for (rule of visible(); track rule.id) {
+        @for (rule of visible(); track rule.ruleId) {
           <rule-card [rule]="rule" />
         } @empty {
           <p class="empty">No rules match that filter.</p>
@@ -55,7 +56,7 @@ import { RuleFilters, type KindFilter } from './rule-filters';
   `,
 })
 export default class RulesPage {
-  protected readonly api = inject(GithubApi);
+  protected readonly api = inject(ShowcaseApi);
 
   private readonly queryState = signal('');
   private readonly kindState = signal<KindFilter>('all');
@@ -63,35 +64,19 @@ export default class RulesPage {
   protected readonly query = this.queryState.asReadonly();
   protected readonly kind = this.kindState.asReadonly();
 
-  protected readonly rules = computed<Rule[]>(() => {
-    const readme = this.api.readme.value();
-    return readme ? parseRules(readme) : [];
-  });
+  protected readonly rules = computed<Rule[]>(() => this.api.rules.value());
 
   /**
-   * Transport failure and parse failure are different problems and get
-   * different messages. A parse failure means the README changed shape, which
-   * is a real risk when reading a document this repo does not control.
-   *
-   * The parse-failure message comes from `parseRulesOrThrow` rather than being
-   * reconstructed here, so there is exactly one place that owns what shape a
-   * valid rules table is expected to have.
+   * The only failure this page can render is a transport failure — the rules
+   * shape itself is now validated server-side, so a malformed response is the
+   * backend's problem, not this page's.
    */
   protected readonly failure = computed<string | null>(() => {
-    const err = this.api.readme.error();
-    if (err) {
-      return err instanceof Error ? err.message : 'Request failed.';
-    }
-    const readme = this.api.readme.value();
-    if (!readme) {
+    const err = this.api.rules.error();
+    if (!err) {
       return null;
     }
-    try {
-      parseRulesOrThrow(readme);
-      return null;
-    } catch (parseError) {
-      return parseError instanceof Error ? parseError.message : 'Could not parse rules.';
-    }
+    return err instanceof Error ? err.message : 'Request failed.';
   });
 
   protected readonly visible = computed<Rule[]>(() => {
@@ -101,7 +86,7 @@ export default class RulesPage {
       const kindOk = kind === 'all' || rule.kind === kind;
       const textOk =
         needle === '' ||
-        rule.id.toLowerCase().includes(needle) ||
+        rule.ruleId.toLowerCase().includes(needle) ||
         rule.trigger.toLowerCase().includes(needle) ||
         rule.fix.toLowerCase().includes(needle);
       return kindOk && textOk;

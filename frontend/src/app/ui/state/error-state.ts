@@ -8,7 +8,7 @@ import { Component, computed, input, output } from '@angular/core';
 @Component({
   selector: 'error-state',
   template: `
-    <div class="box" role="alert" [class.limited]="rateLimited()">
+    <div class="box" role="alert" [class.limited]="rateLimited() || stale()">
       @if (rateLimited()) {
         <h3>GitHub rate limit reached</h3>
         <p>
@@ -20,6 +20,9 @@ import { Component, computed, input, output } from '@angular/core';
             The limit resets within the hour.
           }
         </p>
+      } @else if (stale()) {
+        <h3>Data may be out of date</h3>
+        <p>{{ syncError() ?? "The last sync from GitHub hasn't completed successfully." }}</p>
       } @else {
         <h3>Couldn't load this</h3>
         <p>{{ message() }}</p>
@@ -54,6 +57,15 @@ export class ErrorState {
   readonly message = input.required<string>();
   /** Unix-epoch seconds from `x-ratelimit-reset`, when known. */
   readonly resetAt = input<number | undefined>(undefined);
+  /**
+   * True when the backend's data is not fresh — the last sync failed, or is
+   * older than the sync interval allows. Additive alongside `rateLimited`:
+   * pages still reading from GitHub bind `rateLimited`/`resetAt`, pages
+   * reading from the showcase backend bind `stale`/`syncError` instead.
+   */
+  readonly stale = input(false);
+  /** The error from the last failed sync, shown in place of the generic stale copy when present. */
+  readonly syncError = input<string | undefined>(undefined);
   readonly retry = output<void>();
 
   /**
