@@ -10,4 +10,6 @@ public interface RuleRepository extends JpaRepository<Rule, Long> {
     List<Rule> findByPluginSlugOrderByRuleId(String slug);
 
     Optional<Rule> findByRuleKey(String ruleKey);
+
+    long countByPluginSlug(String slug);
 }

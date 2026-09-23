@@ -305,6 +305,117 @@ that adding a 7th (e.g. a `FindingRepository` for a later task) would retrip
 SB113 and warrant a further split (e.g. separating skill/commit/contributor
 sync from rule sync).
 
+### SB106 — false positive, "catalog" field vs. package segment collision (Task 9)
+**Code:** `private final CatalogService catalog;` in
+`backend/src/main/java/com/jmorgan/showcase/catalog/CatalogController.java` —
+the field is declared `final`, exactly as the brief specifies.
+**Verbatim output:**
+```
+⚠️  SB106: Constructor-injected field is not `final`.
+   💡 Fix: Declare it `private final`.
+   `final` documents that the dependency is fixed for the life of the bean and lets the compiler prove nothing reassigns it. It also makes accidental field injection impossible to add later without noticing.
+   See: spring-boot-essentials skill
+```
+**Verdict:** false positive — the exact same mechanism recorded for Task 8's
+`github`/`GithubClient` field, now reproduced in a different package.
+**Why:** `CatalogController` lives in package `com.jmorgan.showcase.catalog`
+and injects a field named `catalog` (the `CatalogService`). Per Task 8's
+traced mechanism, `check_sb106` scans the whole file for the first line
+matching `^[^\n;]*\bNAME\s*(?:;|=)` outside a method/constructor body; for a
+field named `catalog` in a package whose last segment is also `catalog`, that
+first match is `package com.jmorgan.showcase.catalog;` — not the real
+`private final CatalogService catalog;` declaration further down — so the
+checker flags a field that was declared `final` all along. Not re-traced with
+the embedded Python snippet this time since the mechanism and the file
+structure (field name == last package segment, package statement precedes
+the real declaration) are identical to the already-diagnosed Task 8 case.
+**Action:** none — no code change. The field is genuinely `final` as
+committed; renaming it to dodge the hook would evade the rule's intent rather
+than satisfy it, which the task brief prohibits. This is the second
+independent occurrence of the same structural bug (package-statement line
+matching the declaration-scan regex before the real declaration), which
+strengthens the case for the Task 8 recommendation: a future plugin fix
+should exclude `package`/`import` statement lines from SB106's declaration
+scan.
+
+### SB009 — did not fire on `CatalogController`'s class-level `@RequestMapping` (Task 9, expected)
+**Code:** `@RequestMapping("/api/plugins")` at class level, with every handler
+using `@GetMapping` (no `method =` attribute anywhere) in
+`backend/src/main/java/com/jmorgan/showcase/catalog/CatalogController.java`.
+**Verdict:** no firing observed — did not fire, correctly.
+**Why:** SB009 targets a `method =` attribute inside `@RequestMapping(...)`'s
+argument list. The class-level mapping here carries only a path string, no
+`method =` attribute, so there was nothing for the rule to match. No false
+positive on the bare class-level mapping.
+**Action:** none.
+
+### SB110 — did not fire on `CatalogController` (Task 9, expected coverage gap)
+**Code:** `CatalogController` returns `PluginDto`/`RuleDto`/`SkillSummaryDto`/
+`SkillDto` from `com.jmorgan.showcase.catalog.dto`, never an entity type, so
+this is not a case where SB110 *should* have fired regardless of the
+heuristic — DTOs at the boundary were the correct design either way.
+**Verdict:** did not fire (as expected) — and separately, worth recording
+that the package-name heuristic itself would not have caught it even if the
+controller had returned entities.
+**Why:** SB110 fires when a `@RestController` imports a type from a package
+segment `.entity.` or `.domain.model.` and uses it in a signature. This
+codebase's entities (`Plugin`, `Rule`, `Skill`) live directly in
+`com.jmorgan.showcase.catalog`, not in a `catalog.entity` sub-package — the
+feature-first layout the plugin's own `project-structure` skill and
+Task 4/Task 9's `spring-project-structure` review both endorse (entities and
+repositories held together in one feature package, no `entity`/`repository`
+layer folders). Had `CatalogController` mistakenly returned `Rule` or `Skill`
+directly from a handler, SB110's package-name heuristic would not have
+matched, because `com.jmorgan.showcase.catalog` contains neither `.entity.`
+nor `.domain.model.` as a segment.
+**Action:** none for this task — the controller never references an entity
+type, so there is no live defect to fix. Recorded as a genuine coverage gap:
+SB110's heuristic is keyed to a layered-package layout (`entity`/`domain.model`)
+that conflicts with the feature-first layout the plugin itself recommends
+elsewhere. A future plugin fix should detect "type declared with `@Entity`"
+(a semantic check) rather than "type imported from a package literally named
+`entity` or `domain.model`" (a naming check), or the rule will stay silent on
+every codebase that follows the plugin's own structural advice.
+
+### SB105 — did not fire on `CorsConfig` (Task 9, expected)
+**Code:** `registry.addMapping("/api/**").allowedOrigins("http://localhost:4200").allowedMethods("GET");`
+in `backend/src/main/java/com/jmorgan/showcase/config/CorsConfig.java`.
+**Verdict:** no firing observed — did not fire, correctly.
+**Why:** SB105 flags `allowedOrigins("*")`; the origin here is a single
+enumerated string, not a wildcard, so there was nothing to match.
+**Action:** none.
+
+### SB113 — did not fire on `CatalogController` (Task 9, expected)
+**Code:** `CatalogController` holds one field (`CatalogService catalog`), no
+`*Repository` type anywhere in the file, and the whole file is 47 lines.
+**Verdict:** no firing observed — did not fire, correctly.
+**Why:** SB113 fires on a `@RestController` that references a `*Repository`
+type directly or exceeds ~120 non-blank lines. Neither condition is present:
+the controller depends only on `CatalogService`, and is well under the line
+threshold.
+**Action:** none.
+
+### SB109 — did not fire on `CatalogControllerTest` (Task 9, expected)
+**Code:** `@WebMvcTest(CatalogController.class)` in
+`backend/src/test/java/com/jmorgan/showcase/catalog/CatalogControllerTest.java`
+(a `*ControllerTest`-named file).
+**Verdict:** no firing observed — did not fire, correctly.
+**Why:** SB109 fires on `@SpringBootTest` in a `*ControllerTest`/`*ControllerIT`
+file. This file uses `@WebMvcTest`, the rule's own recommended fix, so there
+was nothing to flag.
+**Action:** none.
+
+### SB004 — did not fire on `CatalogController` (Task 9, expected)
+**Code:** no `@Transactional` annotation anywhere in
+`backend/src/main/java/com/jmorgan/showcase/catalog/CatalogController.java`;
+the boundary lives on `CatalogService` instead.
+**Verdict:** no firing observed — did not fire, correctly (nothing to block).
+**Why:** SB004 blocks `@Transactional` in a file containing `@RestController`.
+The controller never declares the annotation, so the rule had nothing to
+match — the transaction boundary was placed on `CatalogService`
+(`@Transactional(readOnly = true)` at class level) as the brief specified.
+**Action:** none.
+
 ---
 
 ## Agent reviews (Task 4, Step 9)
@@ -383,3 +494,105 @@ home, is worth carrying forward rather than acting on now.
 finished backend — compare that run's package layout against this baseline
 (feature-first, `catalog` holding entity+repository together) and record any
 disagreement between the two runs, per the task brief.
+
+## Agent reviews (Task 9, Step 8)
+
+`spring-boot-guide:spring-architecture-review` dispatched against
+`backend/src/main/java/` (the whole tree, not just the new `catalog`/`config`
+additions — 17 production classes across `catalog`, `catalog/dto`,
+`activity`, `finding`, `github`, `config`). It checked controller→repository
+wiring, entities crossing the web boundary, business logic in controllers,
+`@Transactional` placement, and cross-service call chains.
+
+### Finding 1 — `RepoSyncer.sync()` holds a DB transaction open across multiple blocking GitHub HTTP calls
+**File:** `backend/src/main/java/com/jmorgan/showcase/github/RepoSyncer.java:52-95`
+(Task 8 code, outside Task 9's file list).
+**Reported:** `@Transactional int sync(String repoFullName)` calls
+`github.fetchRepo(...)`, then `syncRules`/`syncSkills`/`syncCommits`/
+`syncContributors`, each making one or more blocking `RestClient` calls
+(`syncSkills` in particular loops `github.fetchFile(...)` once per skill) —
+all inside the single transactional method, so the JDBC connection and
+transaction stay open for the full duration of a scheduled repo crawl,
+including any GitHub rate-limit backoff.
+**Verdict:** true positive — agree.
+**Why:** this is a real and correctly-diagnosed defect: the transaction
+boundary drawn to fix Task 8's SB101 self-invocation bug (see the SB101
+entry above) is real now, but wider than it needs to be — it wraps I/O that
+has nothing to do with the database. The reviewer's own framing ("the
+opposite failure mode from the bug this split was built to fix") is accurate.
+**Action:** deferred, not fixed in Task 9. `RepoSyncer.java` is not in Task
+9's file list (`catalog/dto/*`, `CatalogService`, `CatalogController`,
+`config/CorsConfig`, `CatalogControllerTest`), and separating fetch-from-
+persist in the sync path is a non-trivial restructuring (splitting
+`RepoSyncer.sync()` into an unmanaged fetch phase plus a narrower
+`@Transactional` persistence phase) that deserves its own task rather than a
+drive-by edit here. Recorded so a future task (sync-service hardening, or
+Task 14's final pass) picks this up; the reviewer's suggested fix — fetch
+everything via `GithubClient` outside any transaction, then persist
+already-fetched data inside a small `@Transactional` method — is a reasonable
+starting point.
+
+### Finding 2 — `CatalogService.plugins()` N+1: loads full `Rule` lists just to count them
+**File:** `backend/src/main/java/com/jmorgan/showcase/catalog/CatalogService.java:28-33`
+(Task 9 code, as originally written verbatim from the brief).
+**Reported:** for every plugin from `plugins.findAll()`, a second query loads
+the plugin's entire `Rule` list (including `TEXT` columns `trigger_text`/
+`fix_text`/`gate_text`) solely to call `.size()` on it. The reviewer
+connected this to `docs/spring-plugin-findings.md`'s Task 4 `jpa-review`
+forward note ("re-run once a service layer reads Rule/Skill across more than
+one plugin per call, check whether `@EntityGraph` is needed") — that
+service layer now exists and the predicted shape is present.
+**Verdict:** true positive — agree.
+**Why:** confirmed by reading `CatalogService.plugins()` as originally
+written: `rules.findByPluginSlugOrderByRuleId(p.getSlug()).size()` inside the
+`.map(...)` over `plugins.findAll()` is exactly the N+1 shape described, and
+fetching full `Rule` rows (four `TEXT` columns each) just to discard
+everything but a count is wasteful independent of the N+1 concern.
+**Action:** fixed, since this defect lives entirely inside a file Task 9
+authored. Added `long countByPluginSlug(String slug);` to
+`backend/src/main/java/com/jmorgan/showcase/catalog/RuleRepository.java` and
+changed `CatalogService.plugins()` to call
+`rules.countByPluginSlug(p.getSlug())` instead of
+`.findByPluginSlugOrderByRuleId(p.getSlug()).size()`. This keeps the same
+one-query-per-plugin shape (still N+1, not eliminated — the reviewer's
+alternative of a single grouped `SELECT plugin_id, COUNT(*) FROM rule GROUP
+BY plugin_id` query would remove the N+1 entirely but is a larger change than
+warranted here) while dropping the wasted full-row/`TEXT`-column fetch.
+Re-verified: writing both edited files produced no `PreToolUse`/`PostToolUse`
+hook output, and `./mvnw test` is still 29/29 green afterward.
+
+### Finding 3 (minor/informational) — stale javadoc referencing a nonexistent `SyncController`
+**File:** `backend/src/main/java/com/jmorgan/showcase/github/SyncService.java:22-24`
+(Task 8 code, outside Task 9's file list).
+**Reported:** the class javadoc says `syncRepo` "stays public here ...
+because `SyncServiceTest` calls it directly and `SyncController` injects
+`SyncService`." No `SyncController` exists anywhere in
+`backend/src/main/java/` — the only controller in the codebase is
+`CatalogController`, added by this task, and it does not touch `SyncService`.
+**Verdict:** true positive on the documentation being stale — agree it no
+longer reflects reality now that a controller (`CatalogController`) exists
+and isn't the one the comment anticipated.
+**Why:** confirmed by reading the javadoc and grepping for `SyncController`
+— zero matches anywhere in `backend/src/main/java/`. This is drift, not a
+functional defect: the comment was written ahead of a controller that
+hadn't landed, and the controller that did land (Task 9's
+`CatalogController`) is unrelated to `SyncService`.
+**Action:** deferred, not edited in Task 9. `SyncService.java` is outside
+Task 9's file list and the fix is purely cosmetic (reword to "a future
+controller" or name the actual controller once one calls `SyncService`);
+bundling an unrelated doc-only edit to a Task 8 file into this task's commit
+would blur the diff. Recorded so whichever task next touches
+`SyncService.java` (or adds a controller that calls it) corrects the comment.
+
+### What the review found clean
+Controller→repository wiring (only `CatalogController` exists, depends
+solely on `CatalogService`), entities never crossing the web boundary (all
+four DTOs used consistently, no `@RequestBody` anywhere since every endpoint
+is `@GetMapping`), no business logic in `CatalogController` (filtering
+correctly lives in `CatalogService.rules()`), `@Transactional` placement on
+`CatalogService` (class-level, read-only, correct), and cross-service chains
+(`SyncService`→`RepoSyncer` is the only hop in the codebase, one-directional,
+intentional). Package organization was reconfirmed consistent with the Task
+4 baseline (`catalog` feature-first, `config/CorsConfig` correctly the one
+cross-cutting concern outside a feature package).
+**Verdict:** true negative on all of the above — agree; nothing to add.
