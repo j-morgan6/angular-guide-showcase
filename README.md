@@ -15,19 +15,22 @@ while building this project, and a closing verdict on whether the plugin was wor
 ## What it shows
 
 Three routes, each lazily loaded (`loadComponent`, never `component:` — the plugin's
-NG101 requires this, and `src/app/app.spec.ts` asserts it structurally so a future eager
-route fails the test suite, not just the hook):
+NG101 requires this, and `frontend/src/app/app.spec.ts` asserts it structurally so a future
+eager route fails the test suite, not just the hook):
 
 - **Rules** — the plugin's rule table, parsed live from its README.
 - **Skills** — the plugin's nine skill documents, rendered from real markdown through a
   hand-written token renderer (no `[innerHTML]`, no `bypassSecurityTrustHtml` — NG014 bans
-  both, and `src/app/ui/markdown/` composes real components from `marked`'s token tree
-  instead).
+  both, and `frontend/src/app/ui/markdown/` composes real components from `marked`'s token
+  tree instead).
 - **Activity** — commits and contributors on the plugin's own repository.
 
 ## Local development
 
+The Angular workspace lives in `frontend/`.
+
 ```bash
+cd frontend
 npm install
 npx ng serve
 ```
@@ -37,6 +40,7 @@ Then open `http://localhost:4200/`.
 To run the test suite:
 
 ```bash
+cd frontend
 npx ng test --watch=false
 ```
 

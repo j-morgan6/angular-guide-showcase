@@ -167,6 +167,35 @@ the rule fired on a fixture whose content is the rule's own documentation, twice
 3. At minimum, downgrade to advisory inside spec files rather than blocking, so a fixture cannot
    halt work.
 
+### Detection after monorepo restructure (Task 1, Spring backend plan)
+**Change:** `angular.json` moved from the repo root to `frontend/`.
+**Verdict:** true positive (detection survived; not the risk the plan anticipated)
+**Why:** the plan's brief flagged a real risk on paper — `.angular-guide-project.json` is
+gitignored and its `workspace_root` field pins the repo root, while `angular.json` is no longer
+there, so the two facts looked like they should desync detection. They don't, because
+`hook-lint.sh`'s `find_profile()` (line ~132) never reads `workspace_root` or looks for
+`angular.json` at all: it walks up the directory tree **from the edited file** looking only for
+the presence of a `.angular-guide-project.json` file. Confirmed by reading the function directly
+and by grepping the whole plugin tree for `workspace_root` — the only reader of that field is
+`detect_project.sh`, which writes it; nothing consumes it at lint time. Since `frontend/` is a
+subdirectory of the repo root, walking up from
+`frontend/src/app/tmp-probe/probe.ts` reaches the same `.angular-guide-project.json` the plugin
+wrote before the move. The `any`-typed probe (`export function probe(value: any) { return
+value; }`) was blocked by NG007 on the first write attempt — no re-detection or session
+restart was needed, and the probe file was never created on disk (the hook blocks before the
+write lands). The `workspace_root` value inside the profile is now stale (still points at the
+repo root, not `frontend/`) but is inert — nothing reads it — so the staleness has no
+behavioral effect today. This is a coincidence of the profile file's own location (root,
+gitignored, untouched by `git mv`) landing on an ancestor path of every file the workspace still
+edits, not a property of the `workspace_root` field being correct.
+**Action:** none required for detection to keep working. Worth flagging upstream: `angular_major`,
+`test_runner`, and the other gate-relevant fields in the profile were captured from an
+`angular.json` that has since moved and could drift from reality after further restructuring
+(e.g. a second Angular project added under a different subdirectory, or the workspace renamed) —
+a future `detect_project.sh` re-run would be needed to refresh them. Recommend re-running
+`detect_project.sh` after structural moves even though nothing failed here, since the *content*
+of the profile (not just its resolvability) is what the version-gated rules trust.
+
 ---
 
 ## Defects that are not hook firings
