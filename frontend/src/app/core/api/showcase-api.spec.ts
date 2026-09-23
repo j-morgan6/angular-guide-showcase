@@ -23,18 +23,18 @@ describe('ShowcaseApi', () => {
    * all five or `http.verify()` in afterEach fails on the ones left open.
    */
   function flushOtherEagerResources(): void {
-    http.expectOne('/api/plugins/spring-boot-guide/skills').flush([]);
-    http.expectOne('/api/plugins/spring-boot-guide/activity/commits').flush([]);
-    http.expectOne('/api/plugins/spring-boot-guide/activity/contributors').flush([]);
+    http.expectOne('/api/plugins/angular-guide/skills').flush([]);
+    http.expectOne('/api/plugins/angular-guide/activity/commits').flush([]);
+    http.expectOne('/api/plugins/angular-guide/activity/contributors').flush([]);
   }
 
   it('requests rules from the backend, not from GitHub', async () => {
     TestBed.tick();
-    const req = http.expectOne('/api/plugins/spring-boot-guide/rules');
+    const req = http.expectOne('/api/plugins/angular-guide/rules');
     expect(req.request.method).toBe('GET');
     expect(req.request.url).not.toContain('api.github.com');
 
-    req.flush([{ ruleId: 'SB005', kind: 'blocking', trigger: 'eager', fix: 'lazy', gate: 'none' }]);
+    req.flush([{ ruleId: 'NG101', kind: 'blocking', trigger: 'eager route', fix: 'loadComponent', gate: 'none' }]);
     flushOtherEagerResources();
     http.expectOne('/api/sync/status').flush({
       status: 'never',
@@ -46,12 +46,12 @@ describe('ShowcaseApi', () => {
     });
     await Promise.resolve();
 
-    expect(api.rules.value().map((r) => r.ruleId)).toEqual(['SB005']);
+    expect(api.rules.value().map((r) => r.ruleId)).toEqual(['NG101']);
   });
 
   it('reports stale when the sync status says so', async () => {
     TestBed.tick();
-    http.expectOne('/api/plugins/spring-boot-guide/rules').flush([]);
+    http.expectOne('/api/plugins/angular-guide/rules').flush([]);
     flushOtherEagerResources();
     http.expectOne('/api/sync/status').flush({
       status: 'failed',

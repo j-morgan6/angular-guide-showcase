@@ -8,10 +8,10 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import type { SkillSummary, SyncStatus } from '../../core/api/showcase.types';
 import SkillsPage from './skills-page';
 
-const RULES_URL = '/api/plugins/spring-boot-guide/rules';
-const SKILLS_URL = '/api/plugins/spring-boot-guide/skills';
-const COMMITS_URL = '/api/plugins/spring-boot-guide/activity/commits';
-const CONTRIBUTORS_URL = '/api/plugins/spring-boot-guide/activity/contributors';
+const RULES_URL = '/api/plugins/angular-guide/rules';
+const SKILLS_URL = '/api/plugins/angular-guide/skills';
+const COMMITS_URL = '/api/plugins/angular-guide/activity/commits';
+const CONTRIBUTORS_URL = '/api/plugins/angular-guide/activity/contributors';
 const SYNC_STATUS_URL = '/api/sync/status';
 
 const SKILLS_FIXTURE: SkillSummary[] = [

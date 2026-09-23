@@ -10,10 +10,13 @@ import type {
 } from './showcase.types';
 
 /**
- * The plugin this dashboard reports on. The backend serves several; the UI
- * shows one at a time and this is the default.
+ * The plugin this dashboard reports on. The backend ingests and serves both
+ * angular-guide and spring-boot-guide through the same API — only this UI
+ * surfaces one at a time, and every piece of surrounding copy (header,
+ * footer, route titles, the rules-page lede) names angular-guide. A plugin
+ * switcher that lets the UI show either is the real follow-up.
  */
-const PLUGIN = 'spring-boot-guide';
+const PLUGIN = 'angular-guide';
 const API = '/api';
 
 @Service()
