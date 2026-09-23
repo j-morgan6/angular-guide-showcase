@@ -545,10 +545,13 @@ indirectly via the full-suite compile+boot; the DTO shape and the N+1 fix
 itself are covered by the `jpa-review` agent's static analysis rather than a
 new repository-level query-count test, which Task 10 does not add).
 
-### SB106 — recurrence, "github" field vs. package segment collision (final fix wave, fix 5/6)
+### SB106 — recurrence, "github" field vs. package segment collision (final fix wave, fix 5/6, and the post-review fix-6 regression fix)
 **Code:** every `Edit` of `backend/src/main/java/com/jmorgan/showcase/github/RepoSyncer.java`
 during the fix-5 (empty-README-is-a-failure) and fix-6 (upstream-deletion
-propagation) changes re-fired:
+propagation) changes re-fired, and fired again during the follow-up edit to
+`syncSkills`'s comment when fix 6's skills-listing regression (a transient
+`listSkillNames` failure silently wiping every stored skill) was closed by
+making `GithubClient.listSkillNames` propagate instead of swallow:
 ```
 ⚠️  SB106: Constructor-injected field is not `final`.
    💡 Fix: Declare it `private final`.
