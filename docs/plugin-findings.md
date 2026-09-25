@@ -167,6 +167,129 @@ the rule fired on a fixture whose content is the rule's own documentation, twice
 3. At minimum, downgrade to advisory inside spec files rather than blocking, so a fixture cannot
    halt work.
 
+### Detection after monorepo restructure (Task 1, Spring backend plan)
+**Change:** `angular.json` moved from the repo root to `frontend/`.
+**Verdict:** true positive (detection survived; not the risk the plan anticipated)
+**Why:** the plan's brief flagged a real risk on paper — `.angular-guide-project.json` is
+gitignored and its `workspace_root` field pins the repo root, while `angular.json` is no longer
+there, so the two facts looked like they should desync detection. They don't, because
+`hook-lint.sh`'s `find_profile()` (line ~132) never reads `workspace_root` or looks for
+`angular.json` at all: it walks up the directory tree **from the edited file** looking only for
+the presence of a `.angular-guide-project.json` file. Confirmed by reading the function directly
+and by grepping the whole plugin tree for `workspace_root` — the only reader of that field is
+`detect_project.sh`, which writes it; nothing consumes it at lint time. Since `frontend/` is a
+subdirectory of the repo root, walking up from
+`frontend/src/app/tmp-probe/probe.ts` reaches the same `.angular-guide-project.json` the plugin
+wrote before the move. The `any`-typed probe (`export function probe(value: any) { return
+value; }`) was blocked by NG007 on the first write attempt — no re-detection or session
+restart was needed, and the probe file was never created on disk (the hook blocks before the
+write lands). The `workspace_root` value inside the profile is now stale (still points at the
+repo root, not `frontend/`) but is inert — nothing reads it — so the staleness has no
+behavioral effect today. This is a coincidence of the profile file's own location (root,
+gitignored, untouched by `git mv`) landing on an ancestor path of every file the workspace still
+edits, not a property of the `workspace_root` field being correct.
+**Action:** none required for detection to keep working. Worth flagging upstream: `angular_major`,
+`test_runner`, and the other gate-relevant fields in the profile were captured from an
+`angular.json` that has since moved and could drift from reality after further restructuring
+(e.g. a second Angular project added under a different subdirectory, or the workspace renamed) —
+a future `detect_project.sh` re-run would be needed to refresh them. Recommend re-running
+`detect_project.sh` after structural moves even though nothing failed here, since the *content*
+of the profile (not just its resolvability) is what the version-gated rules trust.
+
+### BG004 — `npx ng test --help` (Task 11, front end rewired to the showcase backend)
+**Code:** `npx ng test --help`, run to check the `@angular/build:unit-test` builder's flag
+names before choosing how to filter a single spec file.
+**Verbatim hook output:**
+```
+🚫 BG004: `ng test` runs in watch mode by default and will hang this session.
+   💡 Fix: Run `ng test --watch=false` (Karma) or `ng test --run` (Vitest).
+```
+**Verdict:** false positive — same defect as the controller-verification entry recorded earlier
+in this log ("BG004 — `npx ng test --help` (controller verification, after Task 1)"), reproduced
+a second time, independently, in this task.
+**Why:** identical root cause: `--help` prints the builder's option list and exits immediately,
+it cannot hang a session, and BG004's guard matches on the `ng test` command prefix with no
+exclusion for `--help`/`-h`/`--version`. This is not a new defect, just a second live occurrence
+of the one already on file — recorded per this task's instruction to report every firing
+explicitly, not because the underlying cause is new.
+**Action:** none required — worked around by using `npm test -- --watch=false` (no positional
+filter argument; passing one, e.g. `npm test -- --watch=false showcase-api`, was rejected by the
+CLI's own argument parser with `Unknown argument: watch`, a separate and unrelated harness
+quirk, not a plugin firing) to discover the correct flag empirically instead. Did not disable
+the plugin or bypass the hook.
+
+### BG005 — a planning **document** blocked because its prose described a deletion (Spring backend plan, before Task 1)
+**Code:** a `Bash` heredoc writing a **markdown planning document** to disk. The heredoc *body*
+— the document's own prose — contained an `rm -r`-shaped phrase and a lockfile filename, as
+text describing a hazard the plan was warning about. Nothing in the command executed either.
+**Verdict:** false positive
+**Why:** `bash-guard.sh` scans the raw `$CMD` string with two independent `grep`s and fires when
+both match anywhere in it:
+```bash
+if printf '%s' "$CMD" | grep -qE "(^|[^a-zA-Z0-9])rm[[:space:]]+-[a-zA-Z]*r" \
+   && printf '%s' "$CMD" | grep -qE '(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lock)'; then
+```
+There is no awareness of shell quoting, of heredoc bodies, or of the fact that the two matches
+came from different sentences of a document that is being *written*, not run. The rule's own
+source comment shows real care about anchoring — it deliberately uses a left word-boundary
+rather than a command-position anchor so that `sudo rm -rf …` is still caught — but that care
+is spent entirely on where `rm` sits within the command text, and none of it on whether the
+text is a command at all. A document about deleting lockfiles is unwritable while this guard
+is active.
+**Disclosure:** this firing was observed by the plan's controller at the start of the Spring
+backend project, before Task 1; it is recorded here from that report rather than reproduced in
+Task 14. The guard source quoted above was read directly and confirms the mechanism.
+**Action:** reworded the document to avoid the literal adjacency. Did not disable the plugin or
+bypass the hook.
+
+### BG004 — consolidated: two independent defects, one of them shared with BG005
+**Consolidates:** the four BG004/BG005 entries above (`ng test --help` ×2, the `git commit`
+message-prose block, and the BG005 planning-document block). This is analysis of firings
+already counted, not a new firing.
+**Verdict:** true defect ×2 (systemic)
+
+BG004's false positives are not one bug seen four times. They are **two independent defects**,
+and only one of them is about BG004 at all:
+
+**Defect (a) — BG004 does not exclude the `--help`/`-h`/`--version` forms.** The guard matches
+the `ng test` command prefix and then checks for a no-watch exemption flag. `ng test --help`
+prints the builder's option list and exits immediately; it cannot hang a session, which is the
+entire hazard BG004 exists to prevent. This is self-defeating in a specific way: the natural
+way to *discover* the correct no-watch flag is to ask the CLI for its options, and BG004 blocks
+exactly that — while its own fix text recommends a `--run` flag this toolchain rejects. Two
+occurrences (controller verification after Task 1; Task 11). **Scope: BG004 only. Fix: add
+`--help`/`-h`/`--version` to the exemption alternation.**
+
+**Defect (b) — the guard treats heredoc bodies and quoted text as command text.** Both guards
+read `$CMD` as an undifferentiated string. A `git commit -m "$(cat <<'EOF' … EOF)"` whose
+message *describes* `ng test --run` fired BG004; a heredoc writing a planning document that
+*describes* deleting a lockfile fired BG005. In neither case was anything executable present.
+**Scope: BG004 *and* BG005, and structurally every rule in `bash-guard.sh` that pattern-matches
+`$CMD`.** This is one general fix, not two rule-specific ones: parse the command far enough to
+separate executable text from heredoc bodies and quoted literal arguments, and match only the
+former.
+
+**Why (b) is the more important of the two.** Defect (a) is an omission in one alternation —
+three tokens and it is closed. Defect (b) is the same class of defect as the three NG001 false
+positives documented above: a bare-text scan with no awareness of what is code and what is
+data. It has now been observed on the Bash side (BG004, BG005) and the file side (NG001), in
+the same plugin, on the same project. **A guard that cannot be told about a hazard in prose
+without triggering on it makes the hazard undocumentable**, which is how a `git commit` message
+describing this very defect came to be blocked by it.
+
+**Cross-plugin precedent that the file-side half of this is solvable.** The sibling
+`spring-boot-guide` plugin, running in the same workspace during the same project, does not
+have the file-side version of defect (b): its `hook-lint.sh:218-237` builds the copy every rule
+matches against by blanking comments **and string-literal content**, with a second opt-in view
+(`LITERAL_PATH`) for the one rule that genuinely needs to see inside quotes. Measured outcome
+in that workspace: a Java test file containing the literal string `"FetchType.EAGER"` and
+another containing `"@RequestMapping(method = …)"` — verbatim trigger text for two of that
+plugin's own rules — produced **zero** firings, while `angular-guide` produced **three** NG001
+false positives on the identical shape. Same hazard, same week, two architectures, measurably
+different results. See `docs/spring-plugin-findings.md`, "SB005 / SB009 — rule-shaped text
+inside Java string literals did NOT fire". The fix this log recommended as option 2 is not
+speculative; a sibling plugin already ships it.
+
 ---
 
 ## Defects that are not hook firings
@@ -227,6 +350,19 @@ recommend `--watch=false` unconditionally; drop the `--run` variant or gate it o
 ---
 
 ## Rules that should have fired but did not
+
+### Correction: there is no NG104 finding, and there never was
+
+Recorded here so it is not rediscovered. The Spring backend plan, and a dispatch derived from
+it, asserted that an existing NG104 finding covered `contributor-card`'s avatar binding, and
+instructed an implementer to preserve that binding on those grounds. **No such finding exists.**
+The NG104 block in the 2026-09-10 design document is an *illustrative example of the
+findings-entry format*, not a record of a firing — it was propagated into the plan as though it
+were real. This log contains **zero** NG104 entries, and `contributor-card` already uses
+`[ngSrc]`, so NG104 cannot fire on it under any circumstance. The plan text was corrected
+(commit `b9ad9eb`); the implementer who received the bad instruction followed it literally while
+flagging the discrepancy, which was the right call. **NG104 must not be counted as a finding in
+any tally.**
 
 ### Profile-timing gap — every NG rule silently disabled in a session-old workspace
 **Rule(s) affected:** all of them (NG007 and every other `hook-lint.sh` rule; the profile gate is checked once,
@@ -488,11 +624,87 @@ in principle), and the composition approach's cost/benefit case is unchanged.
 
 ---
 
+## Coexistence with `spring-boot-guide` (Spring backend plan, Task 14)
+
+The Spring backend project ran both `angular-guide` v1.0.0 and `spring-boot-guide` v1.0.0
+active in the same repository for thirteen tasks — an Angular workspace under `frontend/` and a
+Spring Boot workspace under `backend/`. This is the first time either plugin has been observed
+sharing a repository with another enforcement plugin. **Verdict: safe to run together.** Three
+layers behaved differently and are worth separating.
+
+**Profiles coexisted with no conflict.** Both `SessionStart` detectors ran and each wrote its
+own dotfile at the same repo root, side by side and mutually invisible:
+`.angular-guide-project.json` and `.spring-boot-guide-project.json` (plus
+`.ios-from-web-guide-project.json` from a third installed plugin, correctly reporting
+`is_ios_project: false` and then staying silent for the entire project). No detector read,
+overwrote, or was confused by another's file — each greps only for its own filename walking up
+the tree. Both profiles remained valid and current for the whole project.
+
+**No cross-firing on file types, by construction.** Each plugin's `hook-lint.sh` gates on the
+file extension within ten lines of reading the path, and the two sets are disjoint:
+
+```bash
+# angular-guide/scripts/hook-lint.sh:127-128
+case "$EXT" in ts|html) ;; *) exit 0 ;; esac
+# spring-boot-guide/scripts/hook-lint.sh:126-127
+case "$EXT" in java|properties|yml|yaml) ;; *) exit 0 ;; esac
+```
+
+Measured over thirteen tasks: **no NG rule ever fired on a `.java`, `.yml` or `.sql` file, and
+no SB rule ever fired on a `.ts` or `.html` file.** Not once. Both plugins also resolve their
+profile by walking up **from the edited file** rather than from `$PWD`, so a backend file edited
+from a frontend working directory (and the reverse) still resolves the right profile. This is
+the clean result and it needs no change.
+
+**The Bash guards are the one real collision.** Neither plugin's `bash-guard.sh` gates on file
+type — there is no file to gate on — and `angular-guide`'s BG004/BG005 carry no profile gate
+either, so **both guards inspect every Bash command in the repository regardless of which
+workspace the work is in.** That is how `angular-guide`'s BG004 came to block a command issued
+while working on the Spring backend (Task 11's ledger append, run from the repo root, blocked
+because the ledger *text* mentioned the Angular test command). The two guards never conflicted
+with each other — they simply both always run — but the observable effect is that an Angular
+rule can block Java work. Gating a Bash guard on the workspace the command actually targets is
+genuinely hard for an arbitrary shell command, so this may be a documentation fix rather than a
+code one; either way a user running two guide plugins should expect it.
+
+**Shared `BG001`-`BG006` ID namespace — cosmetic, but it caused a real problem.** Both plugins
+number their Bash guards `BG001` through `BG006`, and the meanings are unrelated:
+
+| ID | `angular-guide` | `spring-boot-guide` |
+|---|---|---|
+| BG002 | `ng build --prod` (flag removed in Angular 12) | bare `mvn`/`gradle` when a wrapper exists |
+| BG004 | `ng test` will hang the session | `spring-boot:run`/`bootRun` will hang the session |
+| BG005 | deleting `node_modules` with the lockfile | deleting the Maven/Gradle wrapper |
+
+Both emit output prefixed with the bare ID and no plugin name. A reader of a transcript — or of
+these two logs side by side — cannot tell which plugin spoke without reading the message body.
+This directly cost time while writing the Task 14 synthesis, attributing firings between two
+logs. **Recommend namespacing the ID in the output line (`NG-BG004` / `SBG-BG004`).**
+
+**The one defect both plugins share identically.** The `Write|Edit`-only hook matcher means
+files written through `Bash` are linted by neither plugin — every NG and SB content rule is
+inert on that path. This is documented at length in `docs/spring-plugin-findings.md`
+("STRUCTURAL — Bash writes bypass every Write|Edit-scoped hook"), where it was discovered and
+measured; it applies to `angular-guide` identically and is recorded here so this log is not
+silent about it. It is not a coexistence problem — each plugin has it alone — but it is the
+single most consequential finding of the Spring project and it is `angular-guide`'s finding
+too.
+
+---
+
 ## Summary
 
-**Hook firings:** 7 total — 2 true positives, 5 false positives, 0 noise. **The ruleset fired
+**Hook firings:** 9 total — 2 true positives, 7 false positives, 0 noise. **The ruleset fired
 wrongly more often than it fired rightly on this project** — stated plainly rather than left
-implicit in a tally.
+implicit in a tally. (The count below of "7" through the rest of this section, and its
+false-positive breakdown, predates Task 11 of the Spring backend plan; Task 11 added one more
+BG004 false positive — a second `npx ng test --help` occurrence — bringing the running total to
+8/2/6/0. Task 14 then added the BG005 planning-document block, recorded above from the
+controller's report at the start of that project, bringing it to **9/2/7/0**. It also predates the "Detection after monorepo restructure" NG007 entry above, which
+was a second confirmation of a true positive already counted rather than a new distinct block,
+so it does not change the true-positive count. This note is added rather than rewriting the
+historical prose below, to avoid overstating how thoroughly this task re-audited entries it did
+not itself produce.)
 
 This count was corrected three times in this final fix wave. First, the original log counted
 an entry — `npx ng test --run` (Task 1) — as a true-positive firing that "correctly blocked"
@@ -514,15 +726,19 @@ positives recur, not a new trigger event.)
 
 - True positives (2): NG007 (Task 1, deliberate probe), NG103 (Task 4, advisory,
   `@Injectable({providedIn:'root'})` → `@Service()`).
-- False positives (5): NG001 (Task 3), NG001 (Task 7), NG001 (final fix wave, `rules.spec.ts`),
-  BG004 (controller, `ng test --help`), BG004 (final fix wave, `git commit` message prose).
+- False positives (7): NG001 (Task 3), NG001 (Task 7), NG001 (final fix wave, `rules.spec.ts`),
+  BG004 (controller, `ng test --help`), BG004 (final fix wave, `git commit` message prose),
+  BG004 (Task 11 of the Spring backend plan, `ng test --help`, second occurrence),
+  BG005 (Spring backend plan, heredoc writing a planning document whose prose described a
+  lockfile deletion).
 - Noise (0): every firing was either a genuine catch or a genuine miss; nothing fired
   correctly on content not worth interrupting for.
 
-**Rules that fired at all:** NG007, NG001, NG103, BG004 — 4 of the plugin's 30 rules (24
+**Rules that fired at all:** NG007, NG001, NG103, BG004, BG005 — 5 of the plugin's 30 rules (24
 `check_ng*` functions in `hook-lint.sh` plus 6 `BG*` guards in `bash-guard.sh`). The other
-26 never triggered across nine implementation tasks plus this controller session and the final
-fix wave. That is expected for rules like NG002 (`@NgModule`) and NG011 (`.mutate()`) that only
+25 never triggered across nine implementation tasks, this controller session, the final
+fix wave, and the thirteen-task Spring backend project that followed. (BG005 is the Task 14
+addition; the "4 of 30" figure this paragraph originally carried predates it.) That is expected for rules like NG002 (`@NgModule`) and NG011 (`.mutate()`) that only
 fire on code no one writing modern Angular would produce — but it is worth stating plainly rather
 than waving past: Tasks 2, 5, 6, and Task 7's fix round produced **zero** firings between them,
 and Task 5 was the single most template-heavy piece of work in the project — 4 components,
@@ -545,8 +761,11 @@ turns on, not in what any individual rule catches once it is on.
 | Priority | Rule | Change | Evidence |
 |---|---|---|---|
 | High | BG004 | Drop the `ng test --run` remedy branch (or gate it on a builder check); recommend `--watch=false` unconditionally | BG004 entries (Task 1, controller remedy-text entry) |
-| High | BG004 | Exclude `--help`/`-h`/`--version` forms from the "will hang this session" block | BG004 — `npx ng test --help` (controller) |
-| High | NG001 (and the 19 other non-`is_spec`-aware `check_ng*` rules) | Call the existing `is_spec()` helper, or strip string/template-literal contents before matching, so rule-shaped text inside test fixtures stops tripping production-code rules | NG001 (Task 3), NG001 (Task 7), NG001 systemic addendum |
+| High | BG004 | Exclude `--help`/`-h`/`--version` forms from the "will hang this session" block — **defect (a)**, BG004-only, three tokens in one alternation | BG004 — `npx ng test --help` (controller, and again Task 11); "BG004 — consolidated" entry |
+| **Critical** | `bash-guard.sh` — **BG004 and BG005 together** | Separate executable command text from heredoc bodies and quoted literal arguments before matching — **defect (b)**, shared by both rules and structurally by every `$CMD` scan in the file. **One general fix, not two rule-specific ones.** | BG004 (`git commit` message prose describing `--run`), BG005 (heredoc writing a planning document whose prose described a lockfile deletion); "BG004 — consolidated" entry |
+| High | NG001 (and the 19 other non-`is_spec`-aware `check_ng*` rules) | Call the existing `is_spec()` helper, or — better — strip string/template-literal contents before matching, so rule-shaped text inside test fixtures stops tripping production-code rules. **Not speculative: the sibling `spring-boot-guide` plugin already ships exactly this** (a default view with literals blanked, plus an opt-in `LITERAL_PATH` for the one rule needing quote contents), and produced zero false positives on the identical hazard in the same workspace where NG001 produced three. | NG001 (Task 3), NG001 (Task 7), NG001 (final fix wave), NG001 systemic addendum; cross-plugin precedent in `docs/spring-plugin-findings.md` ("SB005 / SB009 — rule-shaped text inside Java string literals did NOT fire") |
+| **Critical** | Hook surface (`hooks.json`) | Add a `PostToolUse` hook matched on `Bash` that lints files the command wrote. Every NG content rule is inert for files written via heredoc/`sed`/script, and this harness's auto-mode guidance actively steers agents down that path. | `docs/spring-plugin-findings.md`, "STRUCTURAL — Bash writes bypass every Write\|Edit-scoped hook" — measured there; applies to `angular-guide` identically |
+| Medium | Bash guard output | Namespace the rule ID with the plugin (`NG-BG004`) — `angular-guide` and `spring-boot-guide` both number their Bash guards `BG001`-`BG006` with unrelated meanings, and neither names itself in the output line | "Coexistence with `spring-boot-guide`" section above |
 | Medium | `testing-essentials` skill | Add a section on driving `httpResource` to completion in tests (`TestBed.tick()` + microtask flush; `HttpTestingController` draining eagerly-created root resources) | "The skills teach how to write a pattern but not how to test it — second instance" |
 | Medium | `testing-essentials` skill | Add a section on `@defer` under TestBed (`deferBlockBehavior: Manual`, `getDeferBlocks()`, `render(DeferBlockState.Complete)`), cross-referenced from `performance-and-zoneless` §5 | "performance-and-zoneless mandates `@defer (on viewport)`; testing-essentials never mentions defer" |
 | Low | Plugin bootstrap (`detect_project.sh` / `hook-lint.sh`) | Emit a one-line advisory (or self-invoke detection) when `angular.json` exists but `.angular-guide-project.json` does not, instead of silently disabling every rule | "Profile-timing gap" entry |

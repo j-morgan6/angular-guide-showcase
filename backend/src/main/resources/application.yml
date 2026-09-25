@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: showcase
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+  # Bounds every RestClient.Builder Boot auto-configures (including the one
+  # GithubClient is constructed with) so a half-open connection to GitHub
+  # cannot pin a Hikari-backed request thread forever. Verified against the
+  # 4.1.0 jars: `spring.http.client.*` (singular) still parses but is
+  # deprecated as of 4.0 in favor of `spring.http.clients.*` (plural,
+  # org.springframework.boot.http.client.autoconfigure.HttpClientsProperties)
+  # — using the current, non-deprecated name.
+  http:
+    clients:
+      connect-timeout: 10s
+      read-timeout: 30s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+github:
+  token: ${GITHUB_TOKEN:}
+  base-url: https://api.github.com
+  repos:
+    - j-morgan6/angular-guide
+    - j-morgan6/spring-boot-guide
+  sync-interval: PT6H
