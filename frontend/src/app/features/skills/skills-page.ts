@@ -1,4 +1,4 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, inject, linkedSignal } from '@angular/core';
 import { ShowcaseApi } from '../../core/api/showcase-api';
 import { lexMarkdown, stripFrontmatter } from '../../core/parsing/markdown';
 import { ErrorState } from '../../ui/state/error-state';
@@ -78,7 +78,16 @@ export default class SkillsPage {
   protected readonly api = inject(ShowcaseApi);
   protected readonly skills = computed(() => this.api.skills.value());
 
-  private readonly selectedState = signal<string | undefined>(undefined);
+  /**
+   * The open skill. Derived from the current plugin only in the sense that it
+   * resets when the plugin changes — the skill names differ per plugin, so a
+   * selection carried across a switch would request a document that cannot
+   * exist. Writable in between, because picking a skill is what it is for.
+   */
+  private readonly selectedState = linkedSignal<string, string | undefined>({
+    source: () => this.api.plugin(),
+    computation: () => undefined,
+  });
   protected readonly selected = this.selectedState.asReadonly();
 
   protected readonly doc = this.api.skillDoc(this.selectedState.asReadonly());

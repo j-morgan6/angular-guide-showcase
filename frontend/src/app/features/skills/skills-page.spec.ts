@@ -7,6 +7,7 @@ import {
 import { describe, expect, it, beforeEach } from 'vitest';
 import type { SkillSummary, SyncStatus } from '../../core/api/showcase.types';
 import SkillsPage from './skills-page';
+import { ShowcaseApi } from '../../core/api/showcase-api';
 
 const RULES_URL = '/api/plugins/angular-guide/rules';
 const SKILLS_URL = '/api/plugins/angular-guide/skills';
@@ -55,6 +56,42 @@ describe('SkillsPage', () => {
     http.expectOne(CONTRIBUTORS_URL).flush([]);
     http.expectOne(SYNC_STATUS_URL).flush(syncStatus);
   }
+
+  it('closes the open skill when the plugin changes', async () => {
+    const fixture = TestBed.createComponent(SkillsPage);
+    fixture.detectChanges();
+    drainRootResources();
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    const first = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-skill]',
+    ) as HTMLElement;
+    first.click();
+    fixture.detectChanges();
+    http
+      .expectOne(`${SKILLS_URL}/angular-essentials`)
+      .flush({ name: 'angular-essentials', body: '# Angular essentials' });
+    await Promise.resolve();
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('md-view')).not.toBeNull();
+
+    TestBed.inject(ShowcaseApi).plugin.set('spring-boot-guide');
+    fixture.detectChanges();
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    // angular-essentials is not one of spring-boot-guide's skills. If the
+    // selection survived the switch, the doc resource re-keys to the new slug
+    // and asks for a document that cannot exist.
+    const skillDocRequests = http.match((r) => r.url.includes('/skills/'));
+    expect(skillDocRequests.map((r) => r.request.url)).toEqual([]);
+
+    http.match(() => true).forEach((r) => r.flush([]));
+    await Promise.resolve();
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Pick a skill to read it.');
+  });
 
   it('lists the skills returned by the backend, in order, with no stale notice while fresh', async () => {
     const fixture = TestBed.createComponent(SkillsPage);
