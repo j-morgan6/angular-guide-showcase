@@ -1,45 +1,65 @@
-import { computed, Service, type Signal } from '@angular/core';
+import { computed, signal, Service, type Signal } from '@angular/core';
 import { httpResource } from '@angular/common/http';
 import type {
   Commit,
   Contributor,
+  PluginSummary,
   Rule,
   SkillDoc,
   SkillSummary,
   SyncStatus,
 } from './showcase.types';
 
-/**
- * The plugin this dashboard reports on. The backend ingests and serves both
- * angular-guide and spring-boot-guide through the same API — only this UI
- * surfaces one at a time, and every piece of surrounding copy (header,
- * footer, route titles, the rules-page lede) names angular-guide. A plugin
- * switcher that lets the UI show either is the real follow-up.
- */
-const PLUGIN = 'angular-guide';
 const API = '/api';
+
+/** The slug the app opens on, and the fallback for an unrecognised one. */
+export const DEFAULT_PLUGIN = 'angular-guide';
 
 @Service()
 export class ShowcaseApi {
+  /**
+   * Which plugin this dashboard is reporting on. The backend ingests and
+   * serves both through the same API, so switching is a matter of changing
+   * this slug — every resource below keys on it, so setting it refetches.
+   *
+   * Declared before the resources on purpose: field initializers run in
+   * order, and they read it.
+   */
+  readonly plugin = signal(DEFAULT_PLUGIN);
+
+  /**
+   * Every plugin the backend serves. Not keyed on `plugin` — it is the list
+   * you choose from, so it loads once and drives the header switcher.
+   */
+  readonly plugins = httpResource<PluginSummary[]>(() => `${API}/plugins`, {
+    defaultValue: [],
+  });
+
+  /** The currently-selected plugin's metadata, once the list has loaded. */
+  readonly currentPlugin: Signal<PluginSummary | undefined> = computed(() =>
+    this.plugins.value().find((p) => p.slug === this.plugin()),
+  );
+
   /**
    * Resources are created once at root scope, so navigating between routes
    * reuses them rather than refetching. The backend has no per-IP quota, so
    * this is now about latency rather than about staying inside a budget.
    */
-  readonly rules = httpResource<Rule[]>(() => `${API}/plugins/${PLUGIN}/rules`, {
+  readonly rules = httpResource<Rule[]>(() => `${API}/plugins/${this.plugin()}/rules`, {
     defaultValue: [],
   });
 
-  readonly skills = httpResource<SkillSummary[]>(() => `${API}/plugins/${PLUGIN}/skills`, {
+  readonly skills = httpResource<SkillSummary[]>(() => `${API}/plugins/${this.plugin()}/skills`, {
     defaultValue: [],
   });
 
-  readonly commits = httpResource<Commit[]>(() => `${API}/plugins/${PLUGIN}/activity/commits`, {
-    defaultValue: [],
-  });
+  readonly commits = httpResource<Commit[]>(
+    () => `${API}/plugins/${this.plugin()}/activity/commits`,
+    { defaultValue: [] },
+  );
 
   readonly contributors = httpResource<Contributor[]>(
-    () => `${API}/plugins/${PLUGIN}/activity/contributors`,
+    () => `${API}/plugins/${this.plugin()}/activity/contributors`,
     { defaultValue: [] },
   );
 
@@ -66,7 +86,7 @@ export class ShowcaseApi {
   skillDoc(name: Signal<string | undefined>) {
     return httpResource<SkillDoc>(() => {
       const value = name();
-      return value ? `${API}/plugins/${PLUGIN}/skills/${value}` : undefined;
+      return value ? `${API}/plugins/${this.plugin()}/skills/${value}` : undefined;
     });
   }
 }

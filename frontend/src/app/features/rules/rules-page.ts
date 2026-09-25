@@ -14,7 +14,7 @@ import { RuleFilters, type KindFilter } from './rule-filters';
     <h1>Rules</h1>
     <p class="lede">
       Synced from the plugin's own repository by the showcase backend. Add a rule
-      to angular-guide and it appears here on the next sync, without a redeploy.
+      to {{ api.plugin() }} and it appears here on the next sync, without a redeploy.
     </p>
 
     @if (api.rules.isLoading()) {

@@ -1,3 +1,12 @@
+export interface PluginSummary {
+  readonly slug: string;
+  readonly name: string;
+  readonly repoFullName: string;
+  readonly description: string | null;
+  readonly syncedAt: string | null;
+  readonly ruleCount: number;
+}
+
 export type RuleKind = 'bash' | 'blocking' | 'advisory';
 
 export interface Rule {
